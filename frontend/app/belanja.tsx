@@ -30,7 +30,7 @@ export default function Belanja() {
   const [month, setMonth] = useState(monthKey(0));
   const [open, setOpen] = useState(false);
   const [del, setDel] = useState<any | null>(null);
-  const [form, setForm] = useState({ group: "BENGKEL" as Group, category: "", amount: "", note: "", counterparty: "", qty: "1" });
+  const [form, setForm] = useState({ group: "BENGKEL" as Group, category: "", amount: "", note: "", counterparty: "", qty: "1", supplier: "", unit_price: "", het: "", ongkir: "", discount: "", payment_method: "CASH" as "CASH" | "HUTANG" | "TRANSFER" });
   const [partQ, setPartQ] = useState("");
   const [part, setPart] = useState<any | null>(null);
 
@@ -41,7 +41,7 @@ export default function Belanja() {
 
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["expenses"] }); qc.invalidateQueries({ queryKey: ["expense-summary"] }); qc.invalidateQueries({ queryKey: ["parts"] }); qc.invalidateQueries({ queryKey: ["dashboard"] }); };
   const save = useMutation({
-    mutationFn: () => api("/expenses", { body: { group: form.group, category: form.category, amount: parseNum(form.amount), note: form.note, counterparty: form.counterparty, part_id: part?.id ?? null, qty: parseNum(form.qty) } }),
+    mutationFn: () => api("/expenses", { body: { group: form.group, category: form.category, amount: parseNum(form.amount), note: form.note, counterparty: form.counterparty, part_id: part?.id ?? null, qty: parseNum(form.qty), supplier: form.supplier, unit_price: parseNum(form.unit_price), het: parseNum(form.het), ongkir: parseNum(form.ongkir), discount: parseNum(form.discount), payment_method: form.payment_method } }),
     onSuccess: () => { invalidate(); setOpen(false); toast.show("Belanja tersimpan", "success"); },
     onError: (e: any) => toast.show(e.message, "error"),
   });
@@ -51,7 +51,7 @@ export default function Belanja() {
     onError: (e: any) => toast.show(e.message, "error"),
   });
 
-  const openNew = () => { setForm({ group: group === "ALL" ? "BENGKEL" : group, category: "", amount: "", note: "", counterparty: "", qty: "1" }); setPart(null); setPartQ(""); setOpen(true); };
+  const openNew = () => { setForm({ group: group === "ALL" ? "BENGKEL" : group, category: "", amount: "", note: "", counterparty: "", qty: "1", supplier: "", unit_price: "", het: "", ongkir: "", discount: "", payment_method: "CASH" }); setPart(null); setPartQ(""); setOpen(true); };
   const s = summary.data;
   const isBeliPart = form.group === "BENGKEL" && form.category === "Beli Part";
   const canSave = form.category && parseNum(form.amount) > 0 && (!isBeliPart || (part && parseNum(form.qty) > 0));
@@ -125,6 +125,30 @@ export default function Belanja() {
             </>
           )
         ) : null}
+        {isBeliPart ? (
+          <>
+            <Input label="Supplier / Toko" value={form.supplier} onChangeText={(v) => setForm({ ...form, supplier: v })} testID="expense-supplier-input" />
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <View style={{ flex: 1 }}><Input label="Harga Satuan" value={form.unit_price} onChangeText={(v) => setForm({ ...form, unit_price: v })} keyboardType="number-pad" testID="expense-unitprice-input" /></View>
+              <View style={{ flex: 1 }}><Input label="HET" value={form.het} onChangeText={(v) => setForm({ ...form, het: v })} keyboardType="number-pad" testID="expense-het-input" /></View>
+            </View>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <View style={{ flex: 1 }}><Input label="Diskon (Rp)" value={form.discount} onChangeText={(v) => setForm({ ...form, discount: v })} keyboardType="number-pad" testID="expense-discount-input" /></View>
+              <View style={{ flex: 1 }}><Input label="Ongkir (Rp)" value={form.ongkir} onChangeText={(v) => setForm({ ...form, ongkir: v })} keyboardType="number-pad" testID="expense-ongkir-input" /></View>
+            </View>
+          </>
+        ) : null}
+        {form.category === "Kasbon Mekanik" || form.category === "Gaji Mekanik" ? (
+          <Input label="Nama Mekanik" value={form.counterparty} onChangeText={(v) => setForm({ ...form, counterparty: v })} testID="expense-mechanic-input" />
+        ) : null}
+        <Text style={styles.label}>METODE PEMBAYARAN</Text>
+        <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
+          {(["CASH", "HUTANG", "TRANSFER"] as const).map((pm) => (
+            <Pressable key={pm} onPress={() => setForm({ ...form, payment_method: pm })} style={[styles.catChip, { flex: 1, alignItems: "center" }, form.payment_method === pm && styles.catSel]} testID={`expense-pm-${pm}`}>
+              <Text style={[styles.catText, form.payment_method === pm && { color: colors.onBrandPrimary }]}>{pm}</Text>
+            </Pressable>
+          ))}
+        </View>
         <View style={{ flexDirection: "row", gap: 8 }}>
           <View style={{ flex: 2 }}><Input label="Nominal (Rp) *" value={form.amount} onChangeText={(v) => setForm({ ...form, amount: v })} keyboardType="number-pad" testID="expense-amount-input" /></View>
           {isBeliPart ? <View style={{ flex: 1 }}><Input label="Qty *" value={form.qty} onChangeText={(v) => setForm({ ...form, qty: v })} keyboardType="number-pad" testID="expense-qty-input" /></View> : null}

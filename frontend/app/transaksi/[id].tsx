@@ -44,6 +44,8 @@ export default function TransaksiDetail() {
   const [unlockOpen, setUnlockOpen] = useState(false);
   const [unlockPw, setUnlockPw] = useState("");
   const [unlocking, setUnlocking] = useState(false);
+  const [dateOpen, setDateOpen] = useState(false);
+  const [dateVal, setDateVal] = useState("");
 
   const setData = (d: any) => qc.setQueryData(["transaction", id], d);
   const invalidate = () => {
@@ -104,6 +106,15 @@ export default function TransaksiDetail() {
 
   const openEdit = (i: any) => { setPriceItem(i); setPriceForm({ name: i.name, price: String(i.price), qty: String(i.qty), note: i.note ?? "", reason: "" }); };
 
+  const ymdToDMY = (ymd?: string) => (ymd && ymd.length === 8 ? `${ymd.slice(6, 8)}/${ymd.slice(4, 6)}/${ymd.slice(0, 4)}` : "-");
+  const openDateEdit = () => { setDateVal(ymdToDMY(t.date) === "-" ? "" : ymdToDMY(t.date)); setDateOpen(true); };
+  const saveDate = async () => {
+    try {
+      const d = await act("/date", { date: dateVal }, "PUT");
+      setData(d); invalidate(); setDateOpen(false); toast.show("Tanggal transaksi diperbarui", "success");
+    } catch (e: any) { toast.show(e.message, "error"); }
+  };
+
   const ItemRow = ({ i }: { i: any }) => (
     <View style={styles.itemRow} testID={`item-row-${i.id}`}>
       <Badge label={i.kind === "jasa" ? "JASA" : "PART"} tone={i.kind === "jasa" ? "info" : "brand"} />
@@ -137,6 +148,10 @@ export default function TransaksiDetail() {
           <KV k="KM Masuk" v={t.km_in} mono />
           <KV k="Mekanik" v={t.mechanic_name} />
           <KV k="Didaftarkan" v={fmtDateTime(t.created_at)} />
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+            <Text style={styles.para}>Tanggal Transaksi: <Mono>{ymdToDMY(t.date)}</Mono></Text>
+            {user?.role === "owner" ? <Button title="Ubah Tanggal" variant="outline" icon="calendar-outline" small onPress={openDateEdit} testID="edit-date-button" /> : null}
+          </View>
         </Card>
 
         <Card testID="complaint-card">
@@ -375,6 +390,12 @@ export default function TransaksiDetail() {
         <Text style={styles.para}>Masukkan password Owner untuk membuka mode edit faktur {t.invoice_no ?? t.trx_no}.</Text>
         <Input label="Password Owner" value={unlockPw} onChangeText={setUnlockPw} secureTextEntry autoFocus testID="unlock-password-input" />
         <Button title="Buka Mode Edit" variant="warning" onPress={unlock} loading={unlocking} disabled={!unlockPw} testID="unlock-submit-button" />
+      </Sheet>
+
+      <Sheet visible={dateOpen} onClose={() => setDateOpen(false)} title="Ubah Tanggal Transaksi" testID="date-sheet" scroll={false}>
+        <Text style={styles.para}>Ubah tanggal transaksi {t.invoice_no ?? t.trx_no}. Format: HH/BB/TTTT (mis. 25/09/2026). Omzet & laporan mengikuti tanggal baru.</Text>
+        <Input label="Tanggal (HH/BB/TTTT)" value={dateVal} onChangeText={setDateVal} placeholder="25/09/2026" autoFocus testID="date-input" />
+        <Button title="Simpan Tanggal" onPress={saveDate} disabled={!dateVal.trim()} testID="date-save-button" />
       </Sheet>
 
       <Confirm visible={!!removeItem} title="Hapus Item" message={`Hapus ${removeItem?.name} dari ${isPaid ? "faktur" : "transaksi"}?`} confirmLabel="YA, HAPUS" danger testID="remove-item-confirm"

@@ -5,8 +5,8 @@ import { RefreshControl, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, qs } from "@/src/api";
-import { Button, Card, Chips, Header, Loading, Mono, SectionTitle, useToast } from "@/src/components/ui";
-import { Entity, ENTITY_LABEL, exportBackup, exportExcel, exportReport, importExcel } from "@/src/excel";
+import { Button, Card, Chips, Confirm, Header, Loading, Mono, SectionTitle, useToast } from "@/src/components/ui";
+import { Entity, ENTITY_LABEL, exportBackup, exportExcel, exportReport, importBackup, importExcel } from "@/src/excel";
 import { fmtDate, rupiah } from "@/src/format";
 import { makeStyles, useTheme } from "@/src/theme";
 
@@ -21,7 +21,17 @@ export default function Laporan() {
   const router = useRouter();
   const [mode, setMode] = useState<"daily" | "monthly">("daily");
   const [busy, setBusy] = useState<string | null>(null);
+  const [restoreConfirm, setRestoreConfirm] = useState(false);
   const report = useQuery({ queryKey: ["report", mode], queryFn: () => api<any>(`/reports/omzet${qs({ mode })}`) });
+
+  const doRestore = async () => {
+    setRestoreConfirm(false);
+    setBusy("restore");
+    try {
+      const r = await importBackup();
+      if (r) { toast.show(`Restore selesai: ${r.parts} part, ${r.services} jasa, ${r.customers} pelanggan, ${r.transactions} transaksi`, "success"); qc.invalidateQueries(); }
+    } catch (err: any) { toast.show(err.message ?? "Restore gagal", "error"); } finally { setBusy(null); }
+  };
 
   const doExport = async (e: Entity) => {
     setBusy(`ex-${e}`);
@@ -58,6 +68,12 @@ export default function Laporan() {
           <Button title="Per Mekanik" variant="outline" icon="construct-outline" small onPress={() => router.push("/laporan-mekanik")} style={{ flex: 1 }} testID="open-mechanic-report-button" />
           <Button title="Belanja & Laba" variant="outline" icon="cart-outline" small onPress={() => router.push("/belanja")} style={{ flex: 1 }} testID="open-expenses-button" />
         </View>
+        <SectionTitle title="Laporan Rinci" />
+        <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+          <Button title="Penjualan Servis" variant="dark" icon="receipt-outline" small onPress={() => router.push("/laporan-penjualan")} style={{ flex: 1 }} testID="open-service-sales-button" />
+          <Button title="Jualan Langsung" variant="dark" icon="pricetags-outline" small onPress={() => router.push("/laporan-penjualan?tab=jual")} style={{ flex: 1 }} testID="open-direct-sales-button" />
+        </View>
+        <Button title="Laporan Belanja Rinci (Pembelian, Kasbon, Operasional)" variant="dark" icon="clipboard-outline" small onPress={() => router.push("/laporan-belanja")} style={{ marginBottom: 12 }} testID="open-purchases-report-button" />
         <Button title="Backup Semua Data (Excel)" variant="dark" icon="cloud-download-outline" loading={busy === "backup"} disabled={!!busy} testID="export-backup-button" style={{ marginBottom: 12 }}
           onPress={async () => { setBusy("backup"); try { toast.show(await exportBackup(), "success"); } catch (err: any) { toast.show(err.message ?? "Backup gagal", "error"); } finally { setBusy(null); } }} />
         {report.isLoading ? <Loading /> : rows.length === 0 ? <Text style={styles.muted}>Belum ada transaksi dibayar.</Text> : rows.map((r) => (
@@ -80,7 +96,13 @@ export default function Laporan() {
           <Text style={[styles.muted, { marginBottom: 8 }]}>Gunakan format kolom yang sama dengan hasil export. Data dengan kode / No HP / nopol yang sama akan diperbarui.</Text>
           {ENTITIES.map((e) => <Button key={e} title={`Import ${ENTITY_LABEL[e]}`} variant="outline" icon="cloud-upload-outline" onPress={() => doImport(e)} loading={busy === `im-${e}`} disabled={!!busy} style={{ marginBottom: 8 }} testID={`import-${e}-button`} />)}
         </Card>
+        <SectionTitle title="Restore dari File Backup" />
+        <Card>
+          <Text style={[styles.muted, { marginBottom: 8 }]}>Pulihkan seluruh data (part, jasa, pelanggan, motor, transaksi, pembayaran, belanja) dari file backup Excel (hasil tombol "Backup Semua Data"). Data hasil restore sebelumnya akan diganti; data yang Anda input manual tetap aman.</Text>
+          <Button title="Restore Data dari Backup (Excel)" variant="primary" icon="cloud-upload-outline" loading={busy === "restore"} disabled={!!busy} onPress={() => setRestoreConfirm(true)} testID="restore-backup-button" />
+        </Card>
       </ScrollView>
+      <Confirm visible={restoreConfirm} title="Restore Data" message="Pilih file backup Excel (.xlsx). Proses ini akan memuat ulang data dari file backup. Lanjutkan?" confirmLabel="PILIH FILE" onCancel={() => setRestoreConfirm(false)} onConfirm={doRestore} testID="restore-confirm" />
     </View>
   );
 }

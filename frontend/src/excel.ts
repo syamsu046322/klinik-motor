@@ -22,6 +22,23 @@ export async function exportBackup(): Promise<string> {
   return downloadXlsx(`${BASE_URL}/api/backup/export`, `suel_backup_${new Date().toISOString().slice(0, 10)}.xlsx`, "Backup Data Harian");
 }
 
+export async function exportReportXlsx(kind: "service-sales" | "direct-sales" | "purchases", month: string): Promise<string> {
+  return downloadXlsx(`${BASE_URL}/api/export/report/${kind}?month=${month}`, `suel_${kind}_${month}.xlsx`, "Export Laporan");
+}
+
+export async function importBackup(): Promise<{ ok: boolean; customers: number; vehicles: number; parts: number; services: number; transactions: number; payments: number; expenses: number; sales: number } | null> {
+  const picked = await DocumentPicker.getDocumentAsync({ type: [XLSX_MIME, "application/vnd.ms-excel", "*/*"], copyToCacheDirectory: true, multiple: false });
+  if (picked.canceled || !picked.assets?.length) return null;
+  const asset = picked.assets[0];
+  if (Platform.OS === "web") {
+    const fd = new FormData();
+    if (asset.file) fd.append("file", asset.file, asset.name);
+    else fd.append("file", { uri: asset.uri, name: asset.name ?? "backup.xlsx", type: asset.mimeType ?? XLSX_MIME } as any);
+    return api(`/backup/import`, { method: "POST", formData: fd });
+  }
+  return api(`/backup/import`, { upload: { uri: asset.uri, mimeType: asset.mimeType ?? XLSX_MIME } });
+}
+
 async function downloadXlsx(url: string, fname: string, title: string): Promise<string> {
   const token = await getToken();
   if (Platform.OS === "web") {

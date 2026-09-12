@@ -861,8 +861,8 @@ async def build_detail(trx: dict) -> dict:
     trx["totals"] = {"est_jasa": est_jasa, "est_part": est_part, "add_jasa": add_jasa, "add_part": add_part,
                      "estimasi": est_jasa + est_part, "subtotal": subtotal, "discount": discount, "total": max(subtotal - discount, 0),
                      "pending_approval": sum(1 for i in items if i["approval"] == "MENUNGGU_PERSETUJUAN")}
-    trx["customer"] = clean(await db.customers.find_one({"id": trx["customer_id"]}))
-    trx["vehicle"] = clean(await db.vehicles.find_one({"id": trx["vehicle_id"]}))
+    trx["customer"] = clean(await db.customers.find_one({"id": trx.get("customer_id")})) if trx.get("customer_id") else None
+    trx["vehicle"] = clean(await db.vehicles.find_one({"id": trx.get("vehicle_id")})) if trx.get("vehicle_id") else None
     trx["payment"] = clean(await db.payments.find_one({"transaction_id": trx["id"]}))
     trx["invoice"] = clean(await db.invoices.find_one({"transaction_id": trx["id"]}))
     trx["status_logs"] = await db.transaction_status_logs.find({"transaction_id": trx["id"]}, {"_id": 0}).sort("created_at", 1).to_list(100)
@@ -1757,7 +1757,7 @@ async def unread_count(user: dict) -> int:
 # --------------------------------------------------------------------------- expenses (belanja)
 
 EXPENSE_GROUPS = {
-    "BENGKEL": ["Beli Part", "Listrik", "Perawatan Gedung", "Tools", "Konsumsi", "Transportasi", "Kerugian", "Kesehatan", "Liburan", "Part Promosi"],
+    "BENGKEL": ["Beli Part", "Kasbon Mekanik", "Gaji Mekanik", "Listrik", "Perawatan Gedung", "Tools", "Konsumsi", "Transportasi", "Kerugian", "Kesehatan", "Liburan", "Part Promosi"],
     "KELUARGA": ["Sekolah", "Konsumsi", "Pakaian", "Peralatan Rumah", "Liburan", "Kesehatan", "Saving", "Transportasi", "Komunikasi"],
     "LAINNYA": ["Pinjaman Uang: Orang Tua", "Pinjaman Uang: Bank", "Pinjaman Uang: Pinjol", "Pinjaman Uang: Beli Part",
                 "Uang Dipinjam: Orang Lain", "Uang Dipinjam: Kekurangan Bayar Servis", "Uang Dipinjam: Kasbon Mekanik"],
@@ -1773,6 +1773,12 @@ class ExpenseIn(BaseModel):
     part_id: Optional[str] = None
     qty: int = 0
     date: str = ""  # YYYY-MM-DD optional
+    supplier: str = ""
+    discount: int = 0
+    het: int = 0            # Harga Eceran Tertinggi
+    ongkir: int = 0         # ongkos kirim
+    unit_price: int = 0     # harga satuan
+    payment_method: Literal["CASH", "HUTANG", "TRANSFER"] = "CASH"
 
 
 @api.get("/expenses/categories")
@@ -1826,6 +1832,38 @@ async def delete_expense(eid: str, user: KasirUser):
         await apply_stock_delta(e["part_id"], -int(e["qty"]), "BATAL PEMBELIAN", None, user)
     await audit(None, "EXPENSE_DELETE", user, f"Hapus belanja {e['category']} Rp{e['amount']:,}")
     return {"ok": True}
+
+
+class ExpenseEditIn(BaseModel):
+    date: Optional[str] = None
+    amount: Optional[int] = None
+    note: Optional[str] = None
+    counterparty: Optional[str] = None
+    supplier: Optional[str] = None
+    discount: Optional[int] = None
+    het: Optional[int] = None
+    ongkir: Optional[int] = None
+    unit_price: Optional[int] = None
+    payment_method: Optional[Literal["CASH", "HUTANG", "TRANSFER"]] = None
+
+
+@api.put("/expenses/{eid}")
+async def edit_expense(eid: str, body: ExpenseEditIn, user: KasirUser):
+    e = await db.expenses.find_one({"id": eid, "deleted_at": None})
+    if not e:
+        raise HTTPException(status_code=404, detail="Data belanja tidak ditemukan")
+    if user["role"] != "owner" and e.get("created_by") != user["name"]:
+        raise HTTPException(status_code=403, detail="Hanya Owner yang dapat mengubah")
+    upd = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    if "date" in upd:
+        d = parse_date(upd["date"])
+        if not d:
+            raise HTTPException(status_code=400, detail="Tanggal tidak valid")
+        upd["date"] = d.strftime("%Y-%m-%d")
+    if upd:
+        await db.expenses.update_one({"id": eid}, {"$set": upd})
+    await audit(None, "EXPENSE_EDIT", user, f"Ubah belanja {e['category']}")
+    return clean(await db.expenses.find_one({"id": eid}))
 
 
 @api.get("/expenses/summary")
@@ -1961,19 +1999,20 @@ async def export_backup(_: OwnerUser):
     wb = Workbook()
     ws = wb.active
     ws.title = "Transaksi"
-    tcols = ["trx_no", "invoice_no", "queue_no", "date", "status", "customer_name", "customer_phone", "plate", "vehicle_name", "km_in", "complaint_main",
-             "mechanic_name", "discount", "debt_amount", "debt_status", "debt_due_date", "paid_at", "created_at", "cancel_reason"]
+    tcols = ["id", "trx_no", "invoice_no", "queue_no", "date", "status", "customer_name", "customer_phone", "plate", "vehicle_name", "km_in", "complaint_main",
+             "mechanic_name", "next_recommendation", "discount", "debt_amount", "debt_status", "debt_due_date", "paid_at", "created_at", "cancel_reason"]
     ws.append(tcols)
     async for t in db.service_transactions.find({}, {"_id": 0}).sort("created_at", 1):
         ws.append([t.get(c, "") for c in tcols])
     sheets = [
-        ("Item Transaksi", db.service_items, ["transaction_id", "kind", "source", "approval", "code", "name", "price", "qty", "subtotal", "note", "added_by", "created_at", "deleted_at"]),
+        ("Item Transaksi", db.service_items, ["transaction_id", "kind", "source", "approval", "code", "name", "price", "cost", "qty", "subtotal", "note", "added_by", "created_at", "deleted_at"]),
         ("Pembayaran", db.payments, ["transaction_id", "date", "method", "total", "amount_paid", "change", "discount", "reference", "cashier", "paid_at", "due_date"]),
         ("Cicilan Hutang", db.debt_payments, ["transaction_id", "date", "amount", "method", "cashier", "debt_before", "debt_after", "paid_at"]),
-        ("Belanja", db.expenses, ["date", "group", "category", "amount", "flow", "note", "counterparty", "part_name", "qty", "created_by", "created_at", "deleted_at"]),
+        ("Belanja", db.expenses, ["date", "group", "category", "amount", "flow", "note", "counterparty", "supplier", "discount", "het", "ongkir", "unit_price", "payment_method", "part_name", "qty", "created_by", "created_at", "deleted_at"]),
+        ("Penjualan Langsung", db.sales, ["sale_no", "date", "outlet_name", "customer_name", "customer_phone", "customer_address", "subtotal", "discount", "total", "total_cost", "total_profit", "method", "amount_paid", "debt_amount", "debt_status", "cashier", "created_at", "deleted_at"]),
         ("Pelanggan", db.customers, ["code", "name", "phone", "address", "notes", "created_at", "deleted_at"]),
         ("Motor", db.vehicles, ["plate", "customer_id", "brand", "model", "year", "color", "chassis_no", "engine_no", "km_last", "last_service_at", "deleted_at"]),
-        ("Part", db.parts, ["code", "name", "barcode", "price", "cost", "stock", "min_stock", "unit", "active", "deleted_at"]),
+        ("Part", db.parts, ["code", "name", "barcode", "price", "cost", "stock", "min_stock", "unit", "rack", "active", "deleted_at"]),
         ("Jasa", db.services, ["code", "name", "price", "active", "deleted_at"]),
         ("Mutasi Stok", db.stock_movements, ["created_at", "part_code", "part_name", "qty", "stock_before", "stock_after", "reason", "transaction_no", "username"]),
         ("Checklist Tools", db.tool_checklists, ["created_at", "mechanic_name", "total", "ok", "note"]),
@@ -2281,6 +2320,526 @@ async def sale_whatsapp(sid: str, user: SalesUser):
 
 def ymd_display(ymd: str) -> str:
     return f"{ymd[6:8]}/{ymd[4:6]}/{ymd[0:4]}" if ymd and len(ymd) == 8 else ymd
+
+
+# --------------------------------------------------------------------------- edit tanggal transaksi (owner)
+
+class DateEditIn(BaseModel):
+    date: str  # DD/MM/YYYY atau YYYY-MM-DD
+
+
+def shift_iso_to_date(iso_ts: Optional[str], new_date) -> str:
+    """Ganti komponen tanggal pada timestamp ISO, pertahankan jam:menit:detik. Fallback jam 12:00 WIB."""
+    wib = timezone(timedelta(hours=7))
+    try:
+        dt = datetime.fromisoformat(iso_ts).astimezone(wib) if iso_ts else None
+    except (ValueError, TypeError):
+        dt = None
+    if dt is None:
+        dt = datetime(new_date.year, new_date.month, new_date.day, 12, 0, tzinfo=wib)
+    else:
+        dt = dt.replace(year=new_date.year, month=new_date.month, day=new_date.day)
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+@api.put("/transactions/{tid}/date")
+async def edit_transaction_date(tid: str, body: DateEditIn, user: OwnerUser):
+    trx = await get_trx(tid)
+    d = parse_date(body.date)
+    if not d:
+        raise HTTPException(status_code=400, detail="Format tanggal tidak valid")
+    ymd = d.strftime("%Y%m%d")
+    upd = {"date": ymd, "updated_at": iso(now())}
+    if trx.get("paid_at"):
+        upd["paid_at"] = shift_iso_to_date(trx.get("paid_at"), d)
+    await db.service_transactions.update_one({"id": tid}, {"$set": upd})
+    pay = await db.payments.find_one({"transaction_id": tid})
+    if pay:
+        await db.payments.update_one({"transaction_id": tid}, {"$set": {"date": ymd, "paid_at": shift_iso_to_date(pay.get("paid_at"), d)}})
+    await db.service_history.update_one({"transaction_id": tid}, {"$set": {"date": ymd}})
+    await audit(tid, "DATE_EDIT", user, f"Ubah tanggal transaksi menjadi {d.strftime('%d/%m/%Y')}")
+    return await build_detail(await get_trx(tid))
+
+
+@api.put("/sales/{sid}/date")
+async def edit_sale_date(sid: str, body: DateEditIn, user: SalesUser):
+    if user["role"] not in ("owner",):
+        raise HTTPException(status_code=403, detail="Hanya Owner yang dapat mengubah tanggal")
+    sale = await db.sales.find_one({"id": sid})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Faktur tidak ditemukan")
+    d = parse_date(body.date)
+    if not d:
+        raise HTTPException(status_code=400, detail="Format tanggal tidak valid")
+    ymd = d.strftime("%Y%m%d")
+    await db.sales.update_one({"id": sid}, {"$set": {"date": ymd}})
+    pay = await db.payments.find_one({"transaction_id": sid})
+    if pay:
+        await db.payments.update_one({"transaction_id": sid}, {"$set": {"date": ymd, "paid_at": shift_iso_to_date(pay.get("paid_at"), d)}})
+    await audit(None, "SALE_DATE_EDIT", user, f"Ubah tanggal penjualan {sale.get('sale_no')} menjadi {d.strftime('%d/%m/%Y')}")
+    return clean(await db.sales.find_one({"id": sid}))
+
+
+# --------------------------------------------------------------------------- laporan penjualan servis / jualan / belanja
+
+def month_or_now(month: str) -> str:
+    return month or now().astimezone(timezone(timedelta(hours=7))).strftime("%Y-%m")
+
+
+async def build_service_sales(month: str) -> dict:
+    ymd_prefix = month.replace("-", "")
+    trxs = await db.service_transactions.find({"date": {"$regex": f"^{ymd_prefix}"}, "status": {"$in": STATUS_PAID}, "deleted_at": None}, {"_id": 0}).sort("date", 1).to_list(20000)
+    ids = [t["id"] for t in trxs]
+    all_items = await db.service_items.find({"transaction_id": {"$in": ids}, "deleted_at": None, "approval": "DISETUJUI"}, {"_id": 0}).to_list(100000)
+    part_ids = [i.get("ref_id") for i in all_items if i["kind"] == "part" and i.get("ref_id")]
+    part_codes = [i.get("code") for i in all_items if i["kind"] == "part" and i.get("code")]
+    part_cost = {p["id"]: int(p.get("cost", 0) or 0) for p in await db.parts.find({"id": {"$in": part_ids}}, {"_id": 0, "id": 1, "cost": 1}).to_list(100000)}
+    cost_by_code = {p["code"]: int(p.get("cost", 0) or 0) for p in await db.parts.find({"code": {"$in": part_codes}}, {"_id": 0, "code": 1, "cost": 1}).to_list(100000)}
+    by_trx: dict[str, list] = {}
+    for i in all_items:
+        by_trx.setdefault(i["transaction_id"], []).append(i)
+    rows = []
+    for t in trxs:
+        its = by_trx.get(t["id"], [])
+        jasa = [{"name": i["name"], "price": i["price"], "qty": i["qty"], "subtotal": i["subtotal"]} for i in its if i["kind"] == "jasa"]
+        parts = []
+        for i in its:
+            if i["kind"] != "part":
+                continue
+            cost = int(i.get("cost") or 0) or part_cost.get(i.get("ref_id"), 0) or cost_by_code.get(i.get("code"), 0)
+            profit = i["subtotal"] - cost * i["qty"]
+            parts.append({"name": i["name"], "code": i.get("code", ""), "price": i["price"], "cost": cost, "qty": i["qty"], "subtotal": i["subtotal"], "profit": profit})
+        total_jasa = sum(j["subtotal"] for j in jasa)
+        total_part = sum(p["subtotal"] for p in parts)
+        total_part_cost = sum(p["cost"] * p["qty"] for p in parts)
+        rows.append({
+            "id": t["id"], "date": t.get("date"), "trx_no": t.get("trx_no"), "invoice_no": t.get("invoice_no"),
+            "customer_name": t.get("customer_name"), "customer_phone": t.get("customer_phone"),
+            "plate": t.get("plate"), "vehicle_name": t.get("vehicle_name"), "mechanic_name": t.get("mechanic_name"),
+            "complaint_main": t.get("complaint_main"), "next_recommendation": t.get("next_recommendation", ""),
+            "jasa_items": jasa, "part_items": parts, "total_jasa": total_jasa, "total_part": total_part,
+            "total_part_cost": total_part_cost, "total_part_profit": total_part - total_part_cost,
+            "discount": int(t.get("discount", 0) or 0), "total": max(total_jasa + total_part - int(t.get("discount", 0) or 0), 0),
+        })
+    return {
+        "month": month, "rows": rows, "count": len(rows),
+        "total_jasa": sum(r["total_jasa"] for r in rows), "total_part": sum(r["total_part"] for r in rows),
+        "total_part_profit": sum(r["total_part_profit"] for r in rows), "grand_total": sum(r["total"] for r in rows),
+    }
+
+
+@api.get("/reports/service-sales")
+async def report_service_sales(_: OwnerUser, month: str = ""):
+    return await build_service_sales(month_or_now(month))
+
+
+async def build_direct_sales(month: str) -> dict:
+    ymd_prefix = month.replace("-", "")
+    sales = await db.sales.find({"date": {"$regex": f"^{ymd_prefix}"}, "deleted_at": None}, {"_id": 0}).sort("date", 1).to_list(20000)
+    rows = []
+    for s in sales:
+        rows.append({
+            "id": s["id"], "date": s.get("date"), "sale_no": s.get("sale_no"), "outlet_name": s.get("outlet_name"),
+            "customer_name": s.get("customer_name"), "customer_phone": s.get("customer_phone"), "customer_address": s.get("customer_address"),
+            "items": s.get("items", []), "subtotal": s.get("subtotal", 0), "discount": s.get("discount", 0),
+            "total": s.get("total", 0), "total_cost": s.get("total_cost", 0), "total_profit": s.get("total_profit", 0),
+            "method": s.get("method"), "debt_amount": s.get("debt_amount", 0), "debt_status": s.get("debt_status"),
+        })
+    return {
+        "month": month, "rows": rows, "count": len(rows),
+        "grand_total": sum(r["total"] for r in rows), "total_profit": sum(r["total_profit"] for r in rows),
+    }
+
+
+@api.get("/reports/direct-sales")
+async def report_direct_sales(_: OwnerUser, month: str = ""):
+    return await build_direct_sales(month_or_now(month))
+
+
+async def build_purchases(month: str) -> dict:
+    rows = await db.expenses.find({"deleted_at": None, "date": {"$regex": f"^{month}"}}, {"_id": 0}).sort("date", 1).to_list(20000)
+    parts, kasbon_mekanik, kasbon_owner, operasional, lainnya = [], [], [], [], []
+    by_method = {"CASH": 0, "HUTANG": 0, "TRANSFER": 0}
+    for r in rows:
+        pm = r.get("payment_method") or "CASH"
+        if pm in by_method:
+            by_method[pm] += int(r.get("amount", 0) or 0)
+        rec = {
+            "id": r["id"], "date": r.get("date"), "category": r.get("category"), "amount": int(r.get("amount", 0) or 0),
+            "note": r.get("note", ""), "supplier": r.get("supplier", "") or r.get("counterparty", ""), "part_name": r.get("part_name"),
+            "qty": r.get("qty", 0), "discount": int(r.get("discount", 0) or 0), "het": int(r.get("het", 0) or 0),
+            "ongkir": int(r.get("ongkir", 0) or 0), "unit_price": int(r.get("unit_price", 0) or 0), "payment_method": pm, "flow": r.get("flow", "OUT"),
+        }
+        if r["group"] == "KELUARGA":
+            kasbon_owner.append(rec)
+        elif r["group"] == "LAINNYA":
+            lainnya.append(rec)
+        elif r.get("category") == "Beli Part":
+            parts.append(rec)
+        elif r.get("category") in ("Kasbon Mekanik", "Gaji Mekanik"):
+            kasbon_mekanik.append(rec)
+        else:
+            operasional.append(rec)
+    tot = lambda xs: sum(x["amount"] for x in xs)  # noqa: E731
+    return {
+        "month": month, "parts": parts, "kasbon_mekanik": kasbon_mekanik, "kasbon_owner": kasbon_owner, "operasional": operasional, "lainnya": lainnya,
+        "total_parts": tot(parts), "total_kasbon_mekanik": tot(kasbon_mekanik), "total_kasbon_owner": tot(kasbon_owner),
+        "total_operasional": tot(operasional), "total_lainnya": tot(lainnya), "by_method": by_method,
+        "grand_total": tot(parts) + tot(kasbon_mekanik) + tot(kasbon_owner) + tot(operasional),
+    }
+
+
+@api.get("/reports/purchases")
+async def report_purchases(_: KasirUser, month: str = ""):
+    return await build_purchases(month_or_now(month))
+
+
+def xlsx_response(wb, fname: str) -> StreamingResponse:
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@api.get("/export/report/service-sales")
+async def export_service_sales(_: OwnerUser, month: str = ""):
+    rep = await build_service_sales(month_or_now(month))
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Penjualan Servis"
+    ws.append(["Tanggal", "No Nota", "Pelanggan", "No HP", "No Polisi", "Motor", "Mekanik", "Saran Servis",
+               "Jenis", "Item", "Qty", "Harga Jual", "Harga Beli", "Subtotal", "Profit"])
+    for r in rep["rows"]:
+        tgl = ymd_display(r["date"] or "")
+        for j in r["jasa_items"]:
+            ws.append([tgl, r["invoice_no"] or r["trx_no"], r["customer_name"], r["customer_phone"], r["plate"], r["vehicle_name"], r["mechanic_name"], r["next_recommendation"],
+                       "JASA", j["name"], j["qty"], j["price"], "", j["subtotal"], ""])
+        for p in r["part_items"]:
+            ws.append([tgl, r["invoice_no"] or r["trx_no"], r["customer_name"], r["customer_phone"], r["plate"], r["vehicle_name"], r["mechanic_name"], r["next_recommendation"],
+                       "PART", p["name"], p["qty"], p["price"], p["cost"], p["subtotal"], p["profit"]])
+        ws.append(["", "", "", "", "", "", "", f"TOTAL NOTA {r['invoice_no'] or r['trx_no']}", "", "", "", "", "", r["total"], r["total_part_profit"]])
+        ws.append([])
+    ws.append(["GRAND TOTAL", "", "", "", "", "", "", "", "", "", "", "", "", rep["grand_total"], rep["total_part_profit"]])
+    return xlsx_response(wb, f"suel_penjualan_servis_{month_or_now(month)}.xlsx")
+
+
+@api.get("/export/report/direct-sales")
+async def export_direct_sales(_: OwnerUser, month: str = ""):
+    rep = await build_direct_sales(month_or_now(month))
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Jualan Langsung"
+    ws.append(["Tanggal", "No Faktur", "Outlet", "Pelanggan", "No HP", "Alamat", "Item", "Qty", "Harga Jual", "Harga Beli", "Diskon", "Subtotal", "Profit", "Metode"])
+    for r in rep["rows"]:
+        tgl = ymd_display(r["date"] or "")
+        for it in r["items"]:
+            ws.append([tgl, r["sale_no"], r["outlet_name"], r["customer_name"], r["customer_phone"], r["customer_address"],
+                       it.get("name"), it.get("qty"), it.get("price"), it.get("cost"), it.get("discount", 0), it.get("subtotal"), it.get("profit"), r["method"]])
+        ws.append(["", "", "", "", "", "", f"TOTAL {r['sale_no']}", "", "", "", "", r["total"], r["total_profit"], ""])
+        ws.append([])
+    ws.append(["GRAND TOTAL", "", "", "", "", "", "", "", "", "", "", rep["grand_total"], rep["total_profit"], ""])
+    return xlsx_response(wb, f"suel_jualan_langsung_{month_or_now(month)}.xlsx")
+
+
+@api.get("/export/report/purchases")
+async def export_purchases(_: KasirUser, month: str = ""):
+    rep = await build_purchases(month_or_now(month))
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Pembelian Part"
+    ws.append(["Tanggal", "Nama Part", "Supplier", "Qty", "Harga Satuan", "HET", "Diskon", "Ongkir", "Total", "Metode", "Catatan"])
+    for r in rep["parts"]:
+        ws.append([ymd_display(r["date"] or ""), r["part_name"] or r["category"], r["supplier"], r["qty"], r["unit_price"], r["het"], r["discount"], r["ongkir"], r["amount"], r["payment_method"], r["note"]])
+    ws.append(["TOTAL PEMBELIAN PART", "", "", "", "", "", "", "", rep["total_parts"], "", ""])
+    ws2 = wb.create_sheet("Kasbon & Operasional")
+    ws2.append(["Tanggal", "Jenis", "Kategori", "Penerima/Supplier", "Total", "Metode", "Catatan"])
+    for label, items in [("KASBON MEKANIK", rep["kasbon_mekanik"]), ("KASBON OWNER", rep["kasbon_owner"]), ("BIAYA OPERASIONAL", rep["operasional"]), ("LAIN-LAIN", rep["lainnya"])]:
+        for r in items:
+            ws2.append([ymd_display(r["date"] or ""), label, r["category"], r["supplier"], r["amount"], r["payment_method"], r["note"]])
+    ws2.append([])
+    ws2.append(["Total Kasbon Mekanik", "", "", "", rep["total_kasbon_mekanik"], "", ""])
+    ws2.append(["Total Kasbon Owner", "", "", "", rep["total_kasbon_owner"], "", ""])
+    ws2.append(["Total Biaya Operasional", "", "", "", rep["total_operasional"], "", ""])
+    ws2.append(["CASH / HUTANG / TRANSFER", "", "", "", f"{rep['by_method']['CASH']} / {rep['by_method']['HUTANG']} / {rep['by_method']['TRANSFER']}", "", ""])
+    return xlsx_response(wb, f"suel_belanja_{month_or_now(month)}.xlsx")
+
+
+# --------------------------------------------------------------------------- restore / import backup
+
+def _rows(wb, name: str) -> list[dict]:
+    if name not in wb.sheetnames:
+        return []
+    r = list(wb[name].iter_rows(values_only=True))
+    if not r:
+        return []
+    cols = [str(c).strip() if c is not None else "" for c in r[0]]
+    return [{cols[i]: v for i, v in enumerate(row) if i < len(cols) and cols[i]} for row in r[1:]]
+
+
+def _i(v) -> int:
+    try:
+        return int(float(v or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _s(v) -> str:
+    return "" if v is None else str(v).strip()
+
+
+def _dt_of(s):
+    try:
+        return datetime.fromisoformat(_s(s))
+    except (ValueError, TypeError):
+        return None
+
+
+@api.post("/backup/import")
+async def import_backup(user: OwnerUser, file: UploadFile = File(...)):
+    try:
+        wb = load_workbook(io.BytesIO(await file.read()), data_only=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="File bukan Excel (.xlsx) yang valid")
+    # Buang data hasil impor sebelumnya agar idempotent (tidak menyentuh data yang diinput manual)
+    for coll in ("service_transactions", "service_items", "payments", "debt_payments", "service_history", "expenses", "sales", "stock_movements"):
+        await db[coll].delete_many({"_import": True})
+    now_iso = iso(now())
+    stats = {"customers": 0, "vehicles": 0, "parts": 0, "services": 0, "transactions": 0, "payments": 0, "expenses": 0, "sales": 0}
+
+    # ---- Pelanggan
+    cust_by_phone: dict[str, dict] = {}
+    cust_by_name: dict[str, dict] = {}
+    for r in _rows(wb, "Pelanggan"):
+        name = _s(r.get("name"))
+        if not name:
+            continue
+        phone = _s(r.get("phone"))
+        existing = None
+        if phone:
+            existing = await db.customers.find_one({"phone": phone, "deleted_at": None})
+        if not existing:
+            existing = await db.customers.find_one({"name": name, "deleted_at": None})
+        data = {"name": name, "phone": phone, "address": _s(r.get("address")), "notes": _s(r.get("notes"))}
+        if existing:
+            await db.customers.update_one({"id": existing["id"]}, {"$set": data})
+            cid = existing["id"]
+        else:
+            seq = await next_counter("customer")
+            doc = {"id": new_id(), "code": _s(r.get("code")) or f"C{seq:04d}", **data, "created_at": _s(r.get("created_at")) or now_iso, "deleted_at": r.get("deleted_at") or None}
+            await db.customers.insert_one(doc)
+            cid = doc["id"]
+            stats["customers"] += 1
+        cust = await db.customers.find_one({"id": cid}, {"_id": 0})
+        if phone:
+            cust_by_phone[phone] = cust
+        cust_by_name[name.lower()] = cust
+
+    # plate -> pemilik, dari sheet Transaksi (Motor tidak punya id pelanggan yang cocok)
+    plate_owner: dict[str, tuple] = {}
+    for t in _rows(wb, "Transaksi"):
+        pl = _s(t.get("plate")).upper()
+        if pl:
+            plate_owner[pl] = (_s(t.get("customer_name")), _s(t.get("customer_phone")))
+
+    async def fallback_customer() -> dict:
+        c = await db.customers.find_one({"name": "Pelanggan Umum"}, {"_id": 0})
+        if not c:
+            seq = await next_counter("customer")
+            c = {"id": new_id(), "code": f"C{seq:04d}", "name": "Pelanggan Umum", "phone": "", "address": "", "notes": "Dibuat saat restore", "created_at": now_iso, "deleted_at": None}
+            await db.customers.insert_one(dict(c))
+        return c
+
+    # ---- Motor
+    for r in _rows(wb, "Motor"):
+        plate = _s(r.get("plate")).upper()
+        if not plate:
+            continue
+        cust = None
+        owner = plate_owner.get(plate)
+        if owner:
+            oname, ophone = owner
+            cust = (cust_by_phone.get(ophone) if ophone else None) or cust_by_name.get(oname.lower())
+        if not cust:
+            cust = await fallback_customer()
+        vdata = {k: _s(r.get(k)) for k in ("brand", "model", "year", "color", "chassis_no", "engine_no")}
+        vdata["km_last"] = _i(r.get("km_last"))
+        existing = await db.vehicles.find_one({"plate": plate})
+        if existing:
+            await db.vehicles.update_one({"id": existing["id"]}, {"$set": {**vdata, "customer_id": cust["id"]}})
+        else:
+            await db.vehicles.insert_one({"id": new_id(), "plate": plate, "customer_id": cust["id"], **vdata,
+                                          "last_service_at": r.get("last_service_at") or None, "created_at": now_iso, "deleted_at": r.get("deleted_at") or None})
+            stats["vehicles"] += 1
+
+    # ---- Jasa
+    for r in _rows(wb, "Jasa"):
+        code, name = _s(r.get("code")), _s(r.get("name"))
+        if not code or not name:
+            continue
+        data = {"name": name, "price": _i(r.get("price")), "active": _s(r.get("active")).lower() not in ("false", "0", "tidak", "")}
+        existing = await db.services.find_one({"code": code})
+        if existing:
+            await db.services.update_one({"id": existing["id"]}, {"$set": {**data, "deleted_at": r.get("deleted_at") or None}})
+        else:
+            await db.services.insert_one({"id": new_id(), "code": code, **data, "created_at": now_iso, "deleted_at": r.get("deleted_at") or None})
+            stats["services"] += 1
+
+    # ---- Part (bulk)
+    prows = _rows(wb, "Part")
+    if prows:
+        existing_by_code = {p["code"]: p for p in await db.parts.find({}, {"_id": 0}).to_list(None)}
+        ops = []
+        for r in prows:
+            code, name = _s(r.get("code")), _s(r.get("name"))
+            if not code or not name:
+                continue
+            data = {"name": name, "barcode": _s(r.get("barcode")), "price": _i(r.get("price")), "cost": _i(r.get("cost")),
+                    "stock": _i(r.get("stock")), "min_stock": _i(r.get("min_stock")) or 5, "unit": _s(r.get("unit")) or "pcs",
+                    "rack": _s(r.get("rack")), "active": _s(r.get("active")).lower() not in ("false", "0", "tidak", ""), "deleted_at": r.get("deleted_at") or None}
+            ex = existing_by_code.get(code)
+            if ex:
+                ops.append(UpdateOne({"id": ex["id"]}, {"$set": data}))
+            else:
+                ops.append(InsertOne({"id": new_id(), "code": code, **data, "created_at": now_iso}))
+                stats["parts"] += 1
+        for i in range(0, len(ops), 1000):
+            await db.parts.bulk_write(ops[i:i + 1000], ordered=False)
+
+    # ---- Belanja
+    for r in _rows(wb, "Belanja"):
+        grp = _s(r.get("group")) or "BENGKEL"
+        cat = _s(r.get("category"))
+        if not cat:
+            continue
+        await db.expenses.insert_one({"id": new_id(), "_import": True, "group": grp, "category": cat, "amount": _i(r.get("amount")),
+                                      "flow": _s(r.get("flow")) or "OUT", "note": _s(r.get("note")), "counterparty": _s(r.get("counterparty")),
+                                      "supplier": _s(r.get("supplier")), "discount": _i(r.get("discount")), "het": _i(r.get("het")),
+                                      "ongkir": _i(r.get("ongkir")), "unit_price": _i(r.get("unit_price")), "payment_method": _s(r.get("payment_method")) or "CASH",
+                                      "part_name": _s(r.get("part_name")) or None, "qty": _i(r.get("qty")), "date": _s(r.get("date")),
+                                      "created_by": _s(r.get("created_by")) or user["name"], "created_at": _s(r.get("created_at")) or now_iso, "deleted_at": r.get("deleted_at") or None})
+        stats["expenses"] += 1
+
+    # ---- Transaksi (join item/pembayaran by transaction_id; enrich metadata via created_at proximity)
+    titems = _rows(wb, "Item Transaksi")
+    tpays = _rows(wb, "Pembayaran")
+    tcicilan = _rows(wb, "Cicilan Hutang")
+    trx_rows = _rows(wb, "Transaksi")
+    trx_sorted = sorted([t for t in trx_rows if _dt_of(t.get("created_at"))], key=lambda t: _dt_of(t.get("created_at")))
+    # earliest item time per old txn id
+    earliest: dict[str, datetime] = {}
+    for it in titems:
+        oid = _s(it.get("transaction_id"))
+        d = _dt_of(it.get("created_at"))
+        if oid and d and (oid not in earliest or d < earliest[oid]):
+            earliest[oid] = d
+    for p in tpays:
+        oid = _s(p.get("transaction_id"))
+        d = _dt_of(p.get("paid_at"))
+        if oid and d and oid not in earliest:
+            earliest[oid] = d
+
+    def match_meta(oid: str) -> dict:
+        # gunakan id langsung bila sheet Transaksi punya kolom id (backup versi baru)
+        for t in trx_rows:
+            if _s(t.get("id")) == oid:
+                return t
+        base = earliest.get(oid)
+        if base is None or not trx_sorted:
+            return {}
+        best, bestdiff = None, None
+        for t in trx_sorted:
+            diff = abs((base - _dt_of(t.get("created_at"))).total_seconds())
+            if bestdiff is None or diff < bestdiff:
+                bestdiff, best = diff, t
+        return best if (bestdiff is not None and bestdiff < 600) else {}
+
+    items_by_oid: dict[str, list] = {}
+    for it in titems:
+        items_by_oid.setdefault(_s(it.get("transaction_id")), []).append(it)
+
+    for oid, its in items_by_oid.items():
+        if not oid:
+            continue
+        meta = match_meta(oid)
+        date_ymd = _s(meta.get("date"))
+        if not date_ymd:
+            d0 = earliest.get(oid)
+            date_ymd = d0.astimezone(timezone(timedelta(hours=7))).strftime("%Y%m%d") if d0 else wib_today()
+        status = _s(meta.get("status")) or "SELESAI"
+        trx_doc = {"id": oid, "_import": True, "trx_no": _s(meta.get("trx_no")) or f"TRX-{date_ymd}-{oid[:4]}",
+                   "invoice_no": _s(meta.get("invoice_no")) or None, "queue_no": _s(meta.get("queue_no")), "date": date_ymd, "status": status,
+                   "customer_name": _s(meta.get("customer_name")), "customer_phone": _s(meta.get("customer_phone")),
+                   "plate": _s(meta.get("plate")), "vehicle_name": _s(meta.get("vehicle_name")), "km_in": _i(meta.get("km_in")),
+                   "complaint_main": _s(meta.get("complaint_main")), "mechanic_name": _s(meta.get("mechanic_name")) or None,
+                   "next_recommendation": _s(meta.get("next_recommendation")), "discount": _i(meta.get("discount")),
+                   "debt_amount": _i(meta.get("debt_amount")), "debt_status": _s(meta.get("debt_status")) or None,
+                   "debt_due_date": _s(meta.get("debt_due_date")), "paid_at": _s(meta.get("paid_at")) or None,
+                   "created_at": _s(meta.get("created_at")) or now_iso, "updated_at": now_iso, "cancel_reason": _s(meta.get("cancel_reason")), "deleted_at": None}
+        await db.service_transactions.insert_one(trx_doc)
+        stats["transactions"] += 1
+        for it in its:
+            await db.service_items.insert_one({"id": new_id(), "_import": True, "transaction_id": oid, "kind": _s(it.get("kind")) or "part",
+                                               "ref_id": None, "source": _s(it.get("source")) or "ESTIMASI", "approval": _s(it.get("approval")) or "DISETUJUI",
+                                               "code": _s(it.get("code")), "name": _s(it.get("name")), "price": _i(it.get("price")), "cost": _i(it.get("cost")),
+                                               "qty": _i(it.get("qty")) or 1, "subtotal": _i(it.get("subtotal")), "note": _s(it.get("note")),
+                                               "added_by": _s(it.get("added_by")), "created_at": _s(it.get("created_at")) or now_iso, "deleted_at": it.get("deleted_at") or None})
+
+    for p in tpays:
+        oid = _s(p.get("transaction_id"))
+        if not oid:
+            continue
+        await db.payments.insert_one({"id": new_id(), "_import": True, "transaction_id": oid, "method": _s(p.get("method")) or "CASH",
+                                      "total": _i(p.get("total")), "amount_paid": _i(p.get("amount_paid")), "change": _i(p.get("change")),
+                                      "discount": _i(p.get("discount")), "reference": _s(p.get("reference")), "cashier": _s(p.get("cashier")),
+                                      "paid_at": _s(p.get("paid_at")) or now_iso, "date": _s(p.get("date")) or wib_today(), "due_date": _s(p.get("due_date")), "installments": []})
+        stats["payments"] += 1
+        # service_history agar tampil di histori & pengingat
+        trx = await db.service_transactions.find_one({"id": oid}, {"_id": 0})
+        if trx:
+            await db.service_history.update_one({"transaction_id": oid}, {"$set": {"id": new_id(), "_import": True, "transaction_id": oid,
+                                                "plate": trx.get("plate"), "invoice_no": trx.get("invoice_no"), "total": _i(p.get("total")),
+                                                "mechanic_name": trx.get("mechanic_name"), "date": trx.get("date"), "created_at": _s(p.get("paid_at")) or now_iso}}, upsert=True)
+
+    for c in tcicilan:
+        oid = _s(c.get("transaction_id"))
+        if not oid:
+            continue
+        await db.debt_payments.insert_one({"id": new_id(), "_import": True, "transaction_id": oid, "amount": _i(c.get("amount")),
+                                           "method": _s(c.get("method")) or "CASH", "cashier": _s(c.get("cashier")), "date": _s(c.get("date")),
+                                           "debt_before": _i(c.get("debt_before")), "debt_after": _i(c.get("debt_after")), "paid_at": _s(c.get("paid_at")) or now_iso})
+
+    # ---- Penjualan Langsung (jika ada di backup versi baru)
+    for r in _rows(wb, "Penjualan Langsung"):
+        sale_no = _s(r.get("sale_no"))
+        if not sale_no:
+            continue
+        await db.sales.insert_one({"id": new_id(), "_import": True, "sale_no": sale_no, "outlet_id": None, "outlet_name": _s(r.get("outlet_name")),
+                                   "customer_name": _s(r.get("customer_name")) or "Umum", "customer_phone": _s(r.get("customer_phone")), "customer_address": _s(r.get("customer_address")),
+                                   "items": [], "subtotal": _i(r.get("subtotal")), "discount": _i(r.get("discount")), "total": _i(r.get("total")),
+                                   "total_cost": _i(r.get("total_cost")), "total_profit": _i(r.get("total_profit")), "method": _s(r.get("method")) or "CASH",
+                                   "amount_paid": _i(r.get("amount_paid")), "change": 0, "debt_amount": _i(r.get("debt_amount")), "debt_status": _s(r.get("debt_status")) or None,
+                                   "debt_due_date": "", "installments": [], "note": "", "date": _s(r.get("date")) or wib_today(), "cashier": _s(r.get("cashier")),
+                                   "status": "SELESAI", "created_at": _s(r.get("created_at")) or now_iso, "deleted_at": r.get("deleted_at") or None})
+        stats["sales"] += 1
+
+    # ---- lanjutkan penomoran counter agar tidak bentrok
+    async def bump_counter(key: str, coll, field: str, pattern: str):
+        mx = 0
+        async for d in db[coll].find({field: {"$regex": pattern}}, {field: 1, "_id": 0}):
+            m = re.search(r"(\d+)(?!.*\d)", _s(d.get(field)))
+            if m:
+                mx = max(mx, int(m.group(1)))
+        if mx:
+            await db.counters.update_one({"_id": key}, {"$max": {"seq": mx}}, upsert=True)
+
+    await bump_counter("trx", "service_transactions", "trx_no", r"^TRX-")
+    await bump_counter("invoice", "service_transactions", "invoice_no", r"^NS-")
+    await bump_counter("customer", "customers", "code", r"^C\d+")
+    await bump_counter("sale", "sales", "sale_no", r"^PJ-")
+
+    await audit(None, "BACKUP_IMPORT", user, f"Restore backup: {stats}")
+    return {"ok": True, **stats}
 
 
 app.include_router(api)
