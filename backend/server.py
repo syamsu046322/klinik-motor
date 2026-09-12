@@ -336,6 +336,10 @@ class CustomerIn(BaseModel):
     phone: str = ""
     address: str = ""
     notes: str = ""
+    dusun: str = ""
+    desa: str = ""
+    kecamatan: str = ""
+    kabupaten: str = ""
 
 
 class VehicleIn(BaseModel):
@@ -444,6 +448,7 @@ class StockAdjustIn(BaseModel):
     qty: int
     reason: str = "PENYESUAIAN"
     note: str = ""
+    date: str = ""  # owner boleh mundur-tanggalkan (DD/MM/YYYY / YYYY-MM-DD)
 
 
 @api.get("/services")
@@ -518,10 +523,15 @@ async def adjust_stock(pid: str, body: StockAdjustIn, user: StockUser):
     after = before + body.qty
     if after < 0:
         raise HTTPException(status_code=400, detail="Stok tidak boleh negatif")
+    created = iso(now())
+    if body.date and user["role"] == "owner":
+        d = parse_date(body.date)
+        if d:
+            created = datetime(d.year, d.month, d.day, 12, 0, tzinfo=timezone(timedelta(hours=7))).astimezone(timezone.utc).isoformat()
     doc = await db.parts.find_one_and_update({"id": pid}, {"$set": {"stock": after}}, return_document=True)
     await db.stock_movements.insert_one({"id": new_id(), "part_id": pid, "part_code": part["code"], "part_name": part["name"], "qty": body.qty,
                                          "stock_before": before, "stock_after": after, "reason": body.reason, "note": body.note,
-                                         "transaction_id": None, "transaction_no": None, "username": user["username"], "created_at": iso(now())})
+                                         "transaction_id": None, "transaction_no": None, "username": user["username"], "created_at": created})
     min_stock = int(part.get("min_stock", 0) or 0)
     if body.qty < 0 and after <= min_stock < before:
         await notify(["owner", "partman"], "STOK MENIPIS", f"STOK {'HABIS' if after <= 0 else 'MENIPIS'}: {part['name']}",
@@ -538,6 +548,25 @@ async def part_movements(pid: str, _: CurrentUser):
 @api.get("/stock-movements")
 async def all_movements(_: CurrentUser):
     return await db.stock_movements.find({}, {"_id": 0}).sort("created_at", -1).to_list(300)
+
+
+@api.put("/stock-movements/{mid}/date")
+async def edit_movement_date(mid: str, body: dict, user: OwnerUser):
+    mv = await db.stock_movements.find_one({"id": mid})
+    if not mv:
+        raise HTTPException(status_code=404, detail="Mutasi tidak ditemukan")
+    d = parse_date(str(body.get("date", "")))
+    if not d:
+        raise HTTPException(status_code=400, detail="Tanggal tidak valid")
+    wib = timezone(timedelta(hours=7))
+    try:
+        old = datetime.fromisoformat(mv["created_at"]).astimezone(wib)
+    except (ValueError, TypeError, KeyError):
+        old = datetime(d.year, d.month, d.day, 12, 0, tzinfo=wib)
+    new_dt = old.replace(year=d.year, month=d.month, day=d.day)
+    await db.stock_movements.update_one({"id": mid}, {"$set": {"created_at": new_dt.astimezone(timezone.utc).isoformat()}})
+    await audit(None, "MOVEMENT_DATE_EDIT", user, f"Ubah tanggal mutasi {mv.get('part_name')} → {d.strftime('%d/%m/%Y')}")
+    return {"ok": True}
 
 
 # --------------------------------------------------------------------------- cek fisik stok (stock opname)
@@ -751,6 +780,7 @@ class TransactionCreate(BaseModel):
     initial_check: str = ""
     mechanic_id: Optional[str] = None
     items: list[ItemIn] = []
+    date: str = ""  # owner boleh mundur-tanggalkan pendaftaran
 
 
 class StartIn(BaseModel):
@@ -906,6 +936,12 @@ async def create_transaction(body: TransactionCreate, user: RegistrarUser):
             if not it.name.strip():
                 it.name = p["name"]
     today = now().astimezone(timezone(timedelta(hours=7))).strftime("%Y%m%d")
+    created_at = iso(now())
+    if body.date and user["role"] == "owner":
+        bd = parse_date(body.date)
+        if bd:
+            today = bd.strftime("%Y%m%d")
+            created_at = datetime(bd.year, bd.month, bd.day, 12, 0, tzinfo=timezone(timedelta(hours=7))).astimezone(timezone.utc).isoformat()
     q = await next_counter(f"queue:{today}")
     seq = await next_counter("trx")
     mech = await db.users.find_one({"id": body.mechanic_id}) if body.mechanic_id else None
@@ -917,7 +953,7 @@ async def create_transaction(body: TransactionCreate, user: RegistrarUser):
         "mechanic_id": mech["id"] if mech else None, "mechanic_name": mech["name"] if mech else None,
         "status": "MENUNGGU_SERVIS", "discount": 0, "work_done": "", "inspection": "", "mechanic_note": "", "condition": "",
         "next_recommendation": "", "next_km": None, "next_date": "", "started_at": None, "finished_at": None, "paid_at": None,
-        "created_by": user["username"], "created_at": iso(now()), "updated_at": iso(now()), "deleted_at": None,
+        "created_by": user["username"], "created_at": created_at, "updated_at": iso(now()), "deleted_at": None,
     }
     await db.service_transactions.insert_one(trx)
     await db.service_complaints.insert_one({"id": new_id(), "transaction_id": trx["id"], "main": body.complaint_main,
@@ -1356,6 +1392,7 @@ async def dashboard(user: CurrentUser):
     tools_status = await tools_due_status(user) if user["role"] in ("mekanik", "owner") else None
     debts = await db.service_transactions.find({"debt_status": "BELUM LUNAS"}, {"_id": 0, "debt_amount": 1}).to_list(1000)
     reminders_due = len([r for r in await compute_reminders() if r["status"] in ("TERLAMBAT", "SEGERA")])
+    last_backup = await db.meta.find_one({"_id": "last_backup"}) or {}
     perf_pipe = [{"$match": {"date": today, "status": {"$in": ["MENUNGGU_KASIR", "MENUNGGU_PEMBAYARAN", *STATUS_PAID]}}},
                  {"$group": {"_id": "$mechanic_name", "count": {"$sum": 1}}}]
     perf = [{"mechanic": r["_id"] or "-", "count": r["count"]} for r in await db.service_transactions.aggregate(perf_pipe).to_list(50)]
@@ -1372,6 +1409,7 @@ async def dashboard(user: CurrentUser):
         "jumlah_kendaraan": await db.vehicles.count_documents({"deleted_at": None}), "stok_menipis": low_stock, "performa_mekanik": perf,
         "notif_unread": unread, "piutang_count": len(debts), "piutang_total": sum(int(d.get("debt_amount") or 0) for d in debts), "reminders_due": reminders_due,
         "tools": tools_status,
+        "backup_today": last_backup.get("date") == today, "last_backup_at": last_backup.get("at"),
     }
 
 
@@ -1396,6 +1434,89 @@ async def report_omzet(_: OwnerUser, mode: Literal["daily", "monthly"] = "daily"
         b["count"] += 1
     rows = sorted(buckets.values(), key=lambda r: r["period"], reverse=True)[: (30 if mode == "daily" else 12)]
     return {"mode": mode, "rows": rows, "grand_total": sum(r["total"] for r in rows)}
+
+
+@api.get("/reports/profit-trend")
+async def profit_trend(_: OwnerUser):
+    wib = timezone(timedelta(hours=7))
+    today = now().astimezone(wib).date()
+    # 12 bulan terakhir (key YYYY-MM), urut lama -> baru
+    keys: list[str] = []
+    y, m = today.year, today.month
+    for _ in range(12):
+        keys.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+    keys = list(reversed(keys))
+
+    # laba part dari servis: butuh cost per item (fallback by code / ref_id)
+    items = await db.service_items.find({"kind": "part", "deleted_at": None, "approval": "DISETUJUI"}, {"_id": 0}).to_list(200000)
+    codes = list({i.get("code") for i in items if i.get("code")})
+    ref_ids = list({i.get("ref_id") for i in items if i.get("ref_id")})
+    cost_by_code = {p["code"]: int(p.get("cost", 0) or 0) for p in await db.parts.find({"code": {"$in": codes}}, {"_id": 0, "code": 1, "cost": 1}).to_list(200000)}
+    cost_by_id = {p["id"]: int(p.get("cost", 0) or 0) for p in await db.parts.find({"id": {"$in": ref_ids}}, {"_id": 0, "id": 1, "cost": 1}).to_list(200000)}
+    svc_part_profit: dict[str, int] = {}
+    svc_part_omzet: dict[str, int] = {}
+    for i in items:
+        cost = int(i.get("cost") or 0) or cost_by_id.get(i.get("ref_id"), 0) or cost_by_code.get(i.get("code"), 0)
+        svc_part_profit[i["transaction_id"]] = svc_part_profit.get(i["transaction_id"], 0) + (i["subtotal"] - cost * i["qty"])
+        svc_part_omzet[i["transaction_id"]] = svc_part_omzet.get(i["transaction_id"], 0) + i["subtotal"]
+
+    monthly: dict[str, dict] = {}
+
+    def bucket(k: str) -> dict:
+        return monthly.setdefault(k, {"period": k, "part_profit": 0, "service_part_profit": 0, "sales_profit": 0, "part_omzet": 0})
+
+    # servis: pakai tanggal bayar (paid_at)
+    for p in await db.payments.find({"sale": {"$ne": True}}, {"_id": 0, "transaction_id": 1, "paid_at": 1}).to_list(100000):
+        tid = p.get("transaction_id")
+        if tid not in svc_part_profit and tid not in svc_part_omzet:
+            continue
+        try:
+            k = datetime.fromisoformat(p["paid_at"]).astimezone(wib).strftime("%Y-%m")
+        except (ValueError, TypeError, KeyError):
+            continue
+        b = bucket(k)
+        b["service_part_profit"] += svc_part_profit.get(tid, 0)
+        b["part_profit"] += svc_part_profit.get(tid, 0)
+        b["part_omzet"] += svc_part_omzet.get(tid, 0)
+
+    # jualan langsung
+    for s in await db.sales.find({"deleted_at": None}, {"_id": 0, "date": 1, "total_profit": 1, "total": 1}).to_list(100000):
+        d = str(s.get("date", ""))
+        if len(d) < 6:
+            continue
+        k = f"{d[:4]}-{d[4:6]}"
+        b = bucket(k)
+        b["sales_profit"] += int(s.get("total_profit", 0) or 0)
+        b["part_profit"] += int(s.get("total_profit", 0) or 0)
+        b["part_omzet"] += int(s.get("total", 0) or 0)
+
+    rows = [monthly.get(k, {"period": k, "part_profit": 0, "service_part_profit": 0, "sales_profit": 0, "part_omzet": 0}) for k in keys]
+
+    # tahunan
+    yearly: dict[str, int] = {}
+    for b in monthly.values():
+        yr = b["period"][:4]
+        yearly[yr] = yearly.get(yr, 0) + b["part_profit"]
+    yearly_rows = [{"year": yr, "part_profit": yearly[yr]} for yr in sorted(yearly.keys(), reverse=True)]
+
+    # perbandingan bulan ini vs bulan lalu (M-1)
+    cur_k = keys[-1]
+    prev_k = keys[-2]
+    cur = monthly.get(cur_k, {}).get("part_profit", 0)
+    prev = monthly.get(prev_k, {}).get("part_profit", 0)
+    delta = cur - prev
+    pct = round((delta / prev) * 100, 1) if prev else (100.0 if cur else 0.0)
+    this_year = f"{today.year:04d}"
+    return {
+        "rows": rows,
+        "yearly": yearly_rows,
+        "this_year": this_year,
+        "this_year_profit": yearly.get(this_year, 0),
+        "mom": {"current_period": cur_k, "prev_period": prev_k, "current": cur, "prev": prev, "delta": delta, "pct": pct},
+    }
 
 
 # --------------------------------------------------------------------------- excel export / import
@@ -2010,7 +2131,7 @@ async def export_backup(_: OwnerUser):
         ("Cicilan Hutang", db.debt_payments, ["transaction_id", "date", "amount", "method", "cashier", "debt_before", "debt_after", "paid_at"]),
         ("Belanja", db.expenses, ["date", "group", "category", "amount", "flow", "note", "counterparty", "supplier", "discount", "het", "ongkir", "unit_price", "payment_method", "part_name", "qty", "created_by", "created_at", "deleted_at"]),
         ("Penjualan Langsung", db.sales, ["sale_no", "date", "outlet_name", "customer_name", "customer_phone", "customer_address", "subtotal", "discount", "total", "total_cost", "total_profit", "method", "amount_paid", "debt_amount", "debt_status", "cashier", "created_at", "deleted_at"]),
-        ("Pelanggan", db.customers, ["code", "name", "phone", "address", "notes", "created_at", "deleted_at"]),
+        ("Pelanggan", db.customers, ["code", "name", "phone", "address", "dusun", "desa", "kecamatan", "kabupaten", "notes", "created_at", "deleted_at"]),
         ("Motor", db.vehicles, ["plate", "customer_id", "brand", "model", "year", "color", "chassis_no", "engine_no", "km_last", "last_service_at", "deleted_at"]),
         ("Part", db.parts, ["code", "name", "barcode", "price", "cost", "stock", "min_stock", "unit", "rack", "active", "deleted_at"]),
         ("Jasa", db.services, ["code", "name", "price", "active", "deleted_at"]),
@@ -2026,6 +2147,7 @@ async def export_backup(_: OwnerUser):
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
+    await db.meta.update_one({"_id": "last_backup"}, {"$set": {"date": wib_today(), "at": iso(now())}}, upsert=True)
     fname = f"suel_backup_{wib_today()}.xlsx"
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
@@ -2131,6 +2253,10 @@ class SaleIn(BaseModel):
     customer_name: str = "Umum"
     customer_address: str = ""
     customer_phone: str = ""
+    customer_dusun: str = ""
+    customer_desa: str = ""
+    customer_kecamatan: str = ""
+    customer_kabupaten: str = ""
     discount: int = 0
     method: Literal["CASH", "TRANSFER", "QRIS", "DEBIT", "KREDIT"] = "CASH"
     amount_paid: int = 0
@@ -2238,6 +2364,7 @@ async def create_sale(body: SaleIn, user: SalesUser):
     seq = await next_counter("sale")
     sale = {"id": new_id(), "sale_no": f"PJ-{sale_date}-{seq:04d}", "outlet_id": outlet["id"], "outlet_name": outlet["name"], "customer_name": body.customer_name or "Umum",
             "customer_address": body.customer_address, "customer_phone": body.customer_phone, "items": items, "subtotal": subtotal, "discount": body.discount,
+            "customer_dusun": body.customer_dusun, "customer_desa": body.customer_desa, "customer_kecamatan": body.customer_kecamatan, "customer_kabupaten": body.customer_kabupaten,
             "total": total, "total_cost": total_cost, "total_profit": total_profit, "method": body.method, "amount_paid": amount_paid,
             "change": max(amount_paid - total, 0) if body.method == "CASH" else 0, "debt_amount": debt,
             "debt_status": ("BELUM LUNAS" if debt > 0 else ("LUNAS" if is_credit else None)), "debt_due_date": body.due_date if debt > 0 else "", "installments": [],
@@ -2386,9 +2513,32 @@ def month_or_now(month: str) -> str:
     return month or now().astimezone(timezone(timedelta(hours=7))).strftime("%Y-%m")
 
 
-async def build_service_sales(month: str) -> dict:
-    ymd_prefix = month.replace("-", "")
-    trxs = await db.service_transactions.find({"date": {"$regex": f"^{ymd_prefix}"}, "status": {"$in": STATUS_PAID}, "deleted_at": None}, {"_id": 0}).sort("date", 1).to_list(20000)
+def ymd_range_filter(month: str, dfrom: str, dto: str) -> dict:
+    """Filter untuk field tanggal berformat YYYYMMDD."""
+    if dfrom or dto:
+        r: dict = {}
+        if dfrom:
+            r["$gte"] = dfrom.replace("-", "")
+        if dto:
+            r["$lte"] = dto.replace("-", "")
+        return r
+    return {"$regex": f"^{month.replace('-', '')}"}
+
+
+def dash_range_filter(month: str, dfrom: str, dto: str) -> dict:
+    """Filter untuk field tanggal berformat YYYY-MM-DD."""
+    if dfrom or dto:
+        r: dict = {}
+        if dfrom:
+            r["$gte"] = dfrom
+        if dto:
+            r["$lte"] = dto
+        return r
+    return {"$regex": f"^{month}"}
+
+
+async def build_service_sales(month: str, dfrom: str = "", dto: str = "") -> dict:
+    trxs = await db.service_transactions.find({"date": ymd_range_filter(month, dfrom, dto), "status": {"$in": STATUS_PAID}, "deleted_at": None}, {"_id": 0}).sort("date", 1).to_list(20000)
     ids = [t["id"] for t in trxs]
     all_items = await db.service_items.find({"transaction_id": {"$in": ids}, "deleted_at": None, "approval": "DISETUJUI"}, {"_id": 0}).to_list(100000)
     part_ids = [i.get("ref_id") for i in all_items if i["kind"] == "part" and i.get("ref_id")]
@@ -2429,13 +2579,12 @@ async def build_service_sales(month: str) -> dict:
 
 
 @api.get("/reports/service-sales")
-async def report_service_sales(_: OwnerUser, month: str = ""):
-    return await build_service_sales(month_or_now(month))
+async def report_service_sales(_: OwnerUser, month: str = "", date_from: str = "", date_to: str = ""):
+    return await build_service_sales(month_or_now(month), date_from, date_to)
 
 
-async def build_direct_sales(month: str) -> dict:
-    ymd_prefix = month.replace("-", "")
-    sales = await db.sales.find({"date": {"$regex": f"^{ymd_prefix}"}, "deleted_at": None}, {"_id": 0}).sort("date", 1).to_list(20000)
+async def build_direct_sales(month: str, dfrom: str = "", dto: str = "") -> dict:
+    sales = await db.sales.find({"date": ymd_range_filter(month, dfrom, dto), "deleted_at": None}, {"_id": 0}).sort("date", 1).to_list(20000)
     rows = []
     for s in sales:
         rows.append({
@@ -2452,12 +2601,12 @@ async def build_direct_sales(month: str) -> dict:
 
 
 @api.get("/reports/direct-sales")
-async def report_direct_sales(_: OwnerUser, month: str = ""):
-    return await build_direct_sales(month_or_now(month))
+async def report_direct_sales(_: OwnerUser, month: str = "", date_from: str = "", date_to: str = ""):
+    return await build_direct_sales(month_or_now(month), date_from, date_to)
 
 
-async def build_purchases(month: str) -> dict:
-    rows = await db.expenses.find({"deleted_at": None, "date": {"$regex": f"^{month}"}}, {"_id": 0}).sort("date", 1).to_list(20000)
+async def build_purchases(month: str, dfrom: str = "", dto: str = "") -> dict:
+    rows = await db.expenses.find({"deleted_at": None, "date": dash_range_filter(month, dfrom, dto)}, {"_id": 0}).sort("date", 1).to_list(20000)
     parts, kasbon_mekanik, kasbon_owner, operasional, lainnya = [], [], [], [], []
     by_method = {"CASH": 0, "HUTANG": 0, "TRANSFER": 0}
     for r in rows:
@@ -2490,8 +2639,8 @@ async def build_purchases(month: str) -> dict:
 
 
 @api.get("/reports/purchases")
-async def report_purchases(_: KasirUser, month: str = ""):
-    return await build_purchases(month_or_now(month))
+async def report_purchases(_: KasirUser, month: str = "", date_from: str = "", date_to: str = ""):
+    return await build_purchases(month_or_now(month), date_from, date_to)
 
 
 def xlsx_response(wb, fname: str) -> StreamingResponse:
@@ -2503,8 +2652,8 @@ def xlsx_response(wb, fname: str) -> StreamingResponse:
 
 
 @api.get("/export/report/service-sales")
-async def export_service_sales(_: OwnerUser, month: str = ""):
-    rep = await build_service_sales(month_or_now(month))
+async def export_service_sales(_: OwnerUser, month: str = "", date_from: str = "", date_to: str = ""):
+    rep = await build_service_sales(month_or_now(month), date_from, date_to)
     wb = Workbook()
     ws = wb.active
     ws.title = "Penjualan Servis"
@@ -2525,8 +2674,8 @@ async def export_service_sales(_: OwnerUser, month: str = ""):
 
 
 @api.get("/export/report/direct-sales")
-async def export_direct_sales(_: OwnerUser, month: str = ""):
-    rep = await build_direct_sales(month_or_now(month))
+async def export_direct_sales(_: OwnerUser, month: str = "", date_from: str = "", date_to: str = ""):
+    rep = await build_direct_sales(month_or_now(month), date_from, date_to)
     wb = Workbook()
     ws = wb.active
     ws.title = "Jualan Langsung"
@@ -2543,8 +2692,8 @@ async def export_direct_sales(_: OwnerUser, month: str = ""):
 
 
 @api.get("/export/report/purchases")
-async def export_purchases(_: KasirUser, month: str = ""):
-    rep = await build_purchases(month_or_now(month))
+async def export_purchases(_: KasirUser, month: str = "", date_from: str = "", date_to: str = ""):
+    rep = await build_purchases(month_or_now(month), date_from, date_to)
     wb = Workbook()
     ws = wb.active
     ws.title = "Pembelian Part"
@@ -2620,7 +2769,8 @@ async def import_backup(user: OwnerUser, file: UploadFile = File(...)):
             existing = await db.customers.find_one({"phone": phone, "deleted_at": None})
         if not existing:
             existing = await db.customers.find_one({"name": name, "deleted_at": None})
-        data = {"name": name, "phone": phone, "address": _s(r.get("address")), "notes": _s(r.get("notes"))}
+        data = {"name": name, "phone": phone, "address": _s(r.get("address")), "notes": _s(r.get("notes")),
+                "dusun": _s(r.get("dusun")), "desa": _s(r.get("desa")), "kecamatan": _s(r.get("kecamatan")), "kabupaten": _s(r.get("kabupaten"))}
         if existing:
             await db.customers.update_one({"id": existing["id"]}, {"$set": data})
             cid = existing["id"]
