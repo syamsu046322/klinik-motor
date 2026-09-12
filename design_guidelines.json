@@ -1,0 +1,166 @@
+{
+  "app_name": "KLINIK SUEL MOTOR",
+  "personality": "5 Brutalist Mobile",
+  "personality_one_liner": "A sharp, high-contrast operational command center prioritizing speed, big touch targets, and instant legibility for a fast-paced motorcycle workshop.",
+  "color": {
+    "surface": "#FFFFFF",
+    "onSurface": "#111111",
+    "surfaceSecondary": "#F4F4F5",
+    "onSurfaceSecondary": "#111111",
+    "surfaceTertiary": "#E4E4E7",
+    "onSurfaceTertiary": "#111111",
+    "surfaceInverse": "#111111",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#FF6B00",
+    "onBrand": "#FFFFFF",
+    "brandPrimary": "#FF6B00",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#E66000",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#FFF0E5",
+    "onBrandTertiary": "#FF6B00",
+    "success": "#10B981",
+    "onSuccess": "#FFFFFF",
+    "warning": "#F59E0B",
+    "onWarning": "#FFFFFF",
+    "error": "#EF4444",
+    "onError": "#FFFFFF",
+    "info": "#3B82F6",
+    "onInfo": "#FFFFFF",
+    "border": "#111111",
+    "borderStrong": "#111111",
+    "divider": "#E4E4E7",
+    "muted": "#71717A"
+  },
+  "typography": {
+    "displayFontFamily": "SpaceGrotesk_500Medium",
+    "textFontFamily": "SpaceGrotesk_400Regular",
+    "monoFontFamily": "JetBrainsMono_400Regular",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Use dense utility-driven spacing. Apply fixed bottom paddings for sticky CTAs. Large touch targets (min 48pt) are mandatory.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 0,
+    "md": 0,
+    "lg": 0,
+    "pill": 0
+  },
+  "shadow_tier": "0",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": "false",
+    "do's": [],
+    "dont's": ["Do not use blur or glassmorphism. This is a Brutalist utility app. Keep surfaces opaque and borders sharp."]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Login",
+      "purpose": "Role-based entry (Owner, Kasir, Mekanik, Partman) via username/password.",
+      "states": {
+        "loading": "Spinner centered on screen",
+        "empty": "N/A",
+        "error": "Red inline text with retry button"
+      },
+      "layout": "Hero image at the top with a gradient scrim. Brutalist form fields (sharp borders, labels above inputs). Massive primary 'MASUK' button at the bottom."
+    },
+    {
+      "name": "Dashboard (Role-based)",
+      "purpose": "Provides role-specific shortcuts (e.g., Owner sees Omzet cards and Excel Export; Mekanik sees assigned tasks).",
+      "states": {
+        "loading": "Skeleton of grid cards",
+        "empty": "No active tasks illustration",
+        "error": "Error fetching dashboard data"
+      },
+      "layout": "Top section features prominent mono-font metrics (Omzet/Tasks). Main area contains large, square action buttons (min 48x48dp touch targets) with text labels. 2pt borders separate modules rigidly."
+    },
+    {
+      "name": "Antrian Servis (Queue)",
+      "purpose": "Live list of vehicles being serviced with status badges.",
+      "states": {
+        "loading": "List skeleton",
+        "empty": "Illustration of empty workshop, 'Tidak ada antrian.'",
+        "error": "Failed to load queue"
+      },
+      "layout": "Single-column edge-to-edge list. Each row displays Queue Number (e.g., A-001) in JetBrains Mono. High contrast status badges (Yellow, Blue, Green, Red). A large sticky floating action button '+ TRANSAKSI BARU' at bottom right for Kasir."
+    },
+    {
+      "name": "Detail Transaksi & POS",
+      "purpose": "Full workflow from complaints to mechanic updates to cashier payment.",
+      "states": {
+        "loading": "Data skeleton",
+        "empty": "No items added yet",
+        "error": "Error updating transaction"
+      },
+      "layout": "Contextual details grouped in brutalist cards (Customer, Vehicle, Jasa, Parts). Large action buttons to 'Tambah Jasa' or 'Tambah Part'. Fixed sticky bottom container showing 'TOTAL BAYAR' and a massive 'BAYAR SEKARANG' button for Kasir."
+    },
+    {
+      "name": "Inventori Suku Cadang (Partman)",
+      "purpose": "Manage part stock, barcode scanning, and search.",
+      "states": {
+        "loading": "List skeleton",
+        "empty": "No parts found. 'Scan atau cari part.'",
+        "error": "Search failed"
+      },
+      "layout": "Persistent sticky search bar and barcode scan button at the top. Single-column list of items displaying stock counts in mono font. Edit buttons are clearly labeled."
+    }
+  ],
+  "images": {
+    "hero_login": {
+      "url": "https://images.unsplash.com/photo-1517524206127-48bbd363f3d7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHwxfHxtb3RvcmN5Y2xlJTIwbWVjaGFuaWN8ZW58MHx8fHwxNzg4NzMzMTQ1fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Mechanic holding an engine in a workshop"
+    },
+    "hero_inventory": {
+      "url": "https://images.unsplash.com/photo-1631856954655-966f97d809de?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjd8MHwxfHNlYXJjaHwxfHxoYXJkd2FyZSUyMHN0b3JlJTIwc2hlbGZ8ZW58MHx8fHwxNzg4NzMzMTQ1fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Hardware store shelf with organized parts"
+    },
+    "hero_engine_detail": {
+      "url": "https://images.pexels.com/photos/185545/pexels-photo-185545.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Close up of shiny motorcycle engine components"
+    }
+  },
+  "haptics": {
+    "button_press": "impactLight",
+    "status_change": "impactMedium",
+    "payment_success": "notificationSuccess",
+    "error": "notificationError",
+    "scan_barcode": "impactHeavy"
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the Brutalist Mobile LIGHT personality: 0 radius, 2pt hard borders, no shadows, high-contrast layouts.",
+    "Use JetBrainsMono (or a similar Mono font) for all financial numbers, queue tickets (e.g., A-001), and stock quantities. Use Space Grotesk for everything else.",
+    "Max font weight allowed across the app is 500 (Medium). Use size for hierarchy, not heavier weights.",
+    "BANNED COLORS: No blues, purples, or indigos anywhere (except the specific blue #3B82F6 requested for 'DIPROSES' status). Use the provided Orange and Black palette heavily.",
+    "Implement the Status colors strictly as requested: MENUNGGU (Yellow), DIPROSES (Blue), SELESAI (Green), DIBATALKAN (Red).",
+    "All primary buttons must be massive, text-labeled (not just icons), and provide clear touch targets (min 48pt).",
+    "Detail Transaksi & POS screen MUST feature a fixed sticky container at the bottom with Total Cost and a primary CTA (like 'BAYAR' or 'SIMPAN') so it remains accessible over scrolling content.",
+    "Include an Audit Trail timeline component for tracking transaction history. Use sharp lines and mono timestamps."
+  ]
+}
