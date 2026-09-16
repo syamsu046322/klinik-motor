@@ -36,6 +36,7 @@ export default function Lainnya() {
     { label: "Data Motor", sub: "Master kendaraan", icon: "bicycle-outline", href: "/master/motor", show: can("mekanik", "kasir"), feature: "vehicles", testID: "menu-vehicles" },
     { label: "Data Jasa", sub: "Master jasa & harga", icon: "construct-outline", href: "/master/jasa", show: true, feature: "services", testID: "menu-services" },
     { label: "Mutasi Stok", sub: "Riwayat keluar/masuk part", icon: "swap-vertical-outline", href: "/mutasi", show: can("partman", "mekanik"), feature: "stock-movements", testID: "menu-stock-movements" },
+    { label: "Dashboard Bengkel", sub: "Omset, modal part, belanja & laba bersih hari ini + tren 7 hari", icon: "speedometer-outline", href: "/dashboard-bengkel", show: user?.role === "owner", testID: "menu-dashboard-bengkel" },
     { label: "Laporan Laba Rugi Harian", sub: "Omzet, modal, belanja bengkel, laba bersih, prive", icon: "trending-up-outline", href: "/laba-rugi", show: user?.role === "owner", testID: "menu-laba-rugi" },
     { label: "Penggajian Karyawan", sub: "Gaji pokok + bonus mekanik, slip & rekap gaji", icon: "cash-outline", href: "/penggajian", show: user?.role === "owner", testID: "menu-payroll" },
     { label: "Laporan & Excel", sub: "Omzet harian/bulanan, export/import", icon: "stats-chart-outline", href: "/laporan", show: user?.role === "owner", testID: "menu-reports" },

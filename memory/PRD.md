@@ -25,6 +25,11 @@ Perbaiki 7 bug kritis + tambah modul Penggajian & Pengaturan. UI bahasa Indonesi
 - PENGGAJIAN (owner): CRUD /employees (nama, jabatan, gaji pokok, bonus/unit). Mekanik = gaji pokok + (unit servis selesai bulan ini × bonus/unit). Kasir/Partman gaji tetap. Owner draw. GET /payroll/report (rekap + slip), GET /payroll/slip/{id}. Halaman /penggajian (kartu, slip, tambah/ubah/hapus).
 - HAK AKSES: GET/PUT /settings/access (matriks fitur per jabatan). Menu Lainnya + hormati akses via src/access.ts.
 
+## Implemented — Iterasi 6 (2026-09)
+- Dashboard Bengkel BARU (dashboard lama tidak diubah): halaman `/dashboard-bengkel` + endpoint GET `/reports/dashboard-bengkel` (owner).
+  4 kartu: Omset Hari Ini (hanya servis status SELESAI/SUDAH_DIBAYAR, pembayaran non-batal), Modal Part Hari Ini (cost_snapshot), Belanja Bengkel Hari Ini, Laba Bersih Hari Ini (Omset - Modal - Belanja Bengkel).
+  Grafik tren 7 hari (bar Laba Bersih harian, hari ini oranye). Prive Keluarga dipisah (tidak masuk laba), kartu prive hari ini + 7 hari. Menu Lainnya → "Dashboard Bengkel".
+
 ## Test
 - /app/backend/tests/test_iteration4_payroll_and_bugs.py — 26/26 PASS (JUnit iteration4.xml). Frontend: 4 layar baru render, dashboard Laba Bersih, menu owner lengkap.
 

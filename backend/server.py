@@ -1447,6 +1447,52 @@ async def history(_: CurrentUser, q: str = "", vehicle_id: str = ""):
 # --------------------------------------------------------------------------- dashboard & reports
 
 
+@api.get("/reports/dashboard-bengkel")
+async def dashboard_bengkel(user: OwnerUser):
+    """Dashboard Bengkel baru: Omzet (hanya servis status SELESAI/SUDAH_DIBAYAR, bukan DIBATALKAN),
+    Modal Part, Belanja Bengkel, Laba Bersih hari ini + tren 7 hari. Prive Keluarga dipisah, tidak masuk laba."""
+    wib_now = now().astimezone(WIB).date()
+    day_keys = [(wib_now - timedelta(days=i)).strftime("%Y%m%d") for i in range(6, -1, -1)]  # 7 hari, ASC
+
+    pays = await db.payments.find({"cancelled": {"$ne": True}, "sale": {"$ne": True}, "date": {"$in": day_keys}}, {"_id": 0}).to_list(50000)
+    modal_map = await _modal_by_payment(pays)
+    sales = await db.sales.find({"deleted_at": None, "date": {"$in": day_keys}}, {"_id": 0}).to_list(50000)
+    exp = await db.expenses.find({"deleted_at": None, "date": {"$in": day_keys}}, {"_id": 0}).to_list(50000)
+
+    trend: dict[str, dict] = {d: {"omzet": 0, "modal": 0, "belanja_bengkel": 0, "prive": 0, "laba_bersih": 0} for d in day_keys}
+    for p in pays:
+        b = trend.get(str(p.get("date")))
+        if b:
+            b["omzet"] += int(p.get("total", 0) or 0)
+            b["modal"] += modal_map.get(p["transaction_id"], 0)
+    for s in sales:
+        b = trend.get(str(s.get("date")))
+        if b:
+            b["omzet"] += int(s.get("total", 0) or 0)
+            b["modal"] += int(s.get("total_cost", 0) or 0)
+    for e in exp:
+        b = trend.get(str(e.get("date")))
+        if not b:
+            continue
+        amt = int(e.get("amount", 0) or 0)
+        if e.get("group") == "BENGKEL":
+            b["belanja_bengkel"] += amt if e.get("flow", "OUT") == "OUT" else -amt
+        elif e.get("group") == "KELUARGA":
+            b["prive"] += amt
+    rows = []
+    for d in day_keys:
+        b = trend[d]
+        b["laba_bersih"] = b["omzet"] - b["modal"] - b["belanja_bengkel"]  # Prive TIDAK masuk laba
+        rows.append({"date": f"{d[:4]}-{d[4:6]}-{d[6:8]}", **b})
+    t = trend[wib_today()]
+    return {
+        "today": {"date": wib_now.isoformat(), "omzet": t["omzet"], "modal_part": t["modal"],
+                  "belanja_bengkel": t["belanja_bengkel"], "laba_bersih": t["laba_bersih"], "prive": t["prive"]},
+        "trend": rows,
+        "prive_7d": sum(r["prive"] for r in rows),
+    }
+
+
 @api.get("/dashboard")
 async def dashboard(user: CurrentUser):
     today = wib_today()
