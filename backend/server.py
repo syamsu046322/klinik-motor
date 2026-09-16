@@ -1485,11 +1485,32 @@ async def dashboard_bengkel(user: OwnerUser):
         b["laba_bersih"] = b["omzet"] - b["modal"] - b["belanja_bengkel"]  # Prive TIDAK masuk laba
         rows.append({"date": f"{d[:4]}-{d[4:6]}-{d[6:8]}", **b})
     t = trend[wib_today()]
+    # Ringkasan bulanan + Target Laba + Pengingat Kas Tipis
+    month = wib_now.strftime("%Y-%m")
+    lr_month = await build_laba_rugi(month)
+    laba_month = int(lr_month["total"]["laba_bersih"])
+    fin = await db.settings.find_one({"id": "finance"}, {"_id": 0}) or {}
+    target = int(fin.get("target_laba_bulanan", 0) or 0)
+    target_pct = round((laba_month / target) * 100, 1) if target > 0 else None
+    cf = await report_cashflow(user, month)
+    saldo_bengkel = int(cf["bengkel"]["saldo_akhir"])
+    belanja_month = int(cf["bengkel"]["pengeluaran"])
+    if saldo_bengkel <= 0:
+        kas_level, kas_msg = "danger", "Kas bengkel habis / minus. Segera setor modal atau tahan pengeluaran."
+    elif belanja_month >= saldo_bengkel:
+        kas_level, kas_msg = "danger", "Belanja bengkel sudah melebihi sisa kas. Hentikan pengeluaran tidak penting."
+    elif belanja_month >= saldo_bengkel * 0.8:
+        kas_level, kas_msg = "warning", "Belanja bengkel hampir melebihi saldo kas. Hati-hati atur pengeluaran."
+    else:
+        kas_level, kas_msg = "ok", "Kas bengkel masih aman."
     return {
         "today": {"date": wib_now.isoformat(), "omzet": t["omzet"], "modal_part": t["modal"],
                   "belanja_bengkel": t["belanja_bengkel"], "laba_bersih": t["laba_bersih"], "prive": t["prive"]},
         "trend": rows,
         "prive_7d": sum(r["prive"] for r in rows),
+        "month": {"period": month, "laba_bersih": laba_month, "target": target, "target_pct": target_pct,
+                  "tercapai": target > 0 and laba_month >= target},
+        "kas": {"saldo_bengkel": saldo_bengkel, "belanja_bulan": belanja_month, "level": kas_level, "message": kas_msg},
     }
 
 
@@ -3313,6 +3334,7 @@ class FinanceIn(BaseModel):
     saldo_awal_bengkel: int = 0
     saldo_awal_pribadi: int = 0
     owner_draw: int = 0
+    target_laba_bulanan: int = 0
 
 
 @api.get("/settings/finance")
@@ -3320,7 +3342,8 @@ async def get_finance(_: OwnerUser):
     doc = await db.settings.find_one({"id": "finance"}, {"_id": 0}) or {}
     return {"saldo_awal_bengkel": int(doc.get("saldo_awal_bengkel", 0) or 0),
             "saldo_awal_pribadi": int(doc.get("saldo_awal_pribadi", 0) or 0),
-            "owner_draw": int(doc.get("owner_draw", 0) or 0)}
+            "owner_draw": int(doc.get("owner_draw", 0) or 0),
+            "target_laba_bulanan": int(doc.get("target_laba_bulanan", 0) or 0)}
 
 
 @api.put("/settings/finance")

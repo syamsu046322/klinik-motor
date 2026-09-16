@@ -19,19 +19,19 @@ export default function Pengaturan() {
   const sop = useQuery({ queryKey: ["sop-items"], queryFn: () => api<any[]>("/service-checklist-items") });
   const acc = useQuery({ queryKey: ["access"], queryFn: () => api<{ roles: RoleAccess }>("/settings/access") });
 
-  const [finForm, setFinForm] = useState({ saldo_awal_bengkel: "", saldo_awal_pribadi: "", owner_draw: "" });
+  const [finForm, setFinForm] = useState({ saldo_awal_bengkel: "", saldo_awal_pribadi: "", owner_draw: "", target_laba_bulanan: "" });
   const [roles, setRoles] = useState<RoleAccess>({});
   const [sopSheet, setSopSheet] = useState(false);
   const [sopName, setSopName] = useState("");
   const [sopEditId, setSopEditId] = useState<string | null>(null);
   const [sopDel, setSopDel] = useState<any | null>(null);
 
-  useEffect(() => { if (fin.data) setFinForm({ saldo_awal_bengkel: String(fin.data.saldo_awal_bengkel || ""), saldo_awal_pribadi: String(fin.data.saldo_awal_pribadi || ""), owner_draw: String(fin.data.owner_draw || "") }); }, [fin.data]);
+  useEffect(() => { if (fin.data) setFinForm({ saldo_awal_bengkel: String(fin.data.saldo_awal_bengkel || ""), saldo_awal_pribadi: String(fin.data.saldo_awal_pribadi || ""), owner_draw: String(fin.data.owner_draw || ""), target_laba_bulanan: String(fin.data.target_laba_bulanan || "") }); }, [fin.data]);
   useEffect(() => { if (acc.data) setRoles(acc.data.roles || {}); }, [acc.data]);
 
   const saveFin = useMutation({
-    mutationFn: () => api("/settings/finance", { method: "PUT", body: { saldo_awal_bengkel: parseNum(finForm.saldo_awal_bengkel), saldo_awal_pribadi: parseNum(finForm.saldo_awal_pribadi), owner_draw: parseNum(finForm.owner_draw) } }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["finance"] }); qc.invalidateQueries({ queryKey: ["cashflow"] }); qc.invalidateQueries({ queryKey: ["payroll"] }); toast.show("Saldo awal disimpan", "success"); },
+    mutationFn: () => api("/settings/finance", { method: "PUT", body: { saldo_awal_bengkel: parseNum(finForm.saldo_awal_bengkel), saldo_awal_pribadi: parseNum(finForm.saldo_awal_pribadi), owner_draw: parseNum(finForm.owner_draw), target_laba_bulanan: parseNum(finForm.target_laba_bulanan) } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["finance"] }); qc.invalidateQueries({ queryKey: ["cashflow"] }); qc.invalidateQueries({ queryKey: ["payroll"] }); qc.invalidateQueries({ queryKey: ["dashboard-bengkel"] }); toast.show("Saldo awal disimpan", "success"); },
     onError: (e: any) => toast.show(e.message, "error"),
   });
   const saveAcc = useMutation({
@@ -64,6 +64,7 @@ export default function Pengaturan() {
           <Input label="Saldo Awal Kas Bengkel" value={finForm.saldo_awal_bengkel} onChangeText={(v) => setFinForm({ ...finForm, saldo_awal_bengkel: v })} keyboardType="number-pad" testID="finance-bengkel-input" />
           <Input label="Saldo Awal Kas Pribadi (Tabungan)" value={finForm.saldo_awal_pribadi} onChangeText={(v) => setFinForm({ ...finForm, saldo_awal_pribadi: v })} keyboardType="number-pad" testID="finance-pribadi-input" />
           <Input label="Pengambilan Gaji Owner / bulan" value={finForm.owner_draw} onChangeText={(v) => setFinForm({ ...finForm, owner_draw: v })} keyboardType="number-pad" testID="finance-owner-draw-input" />
+          <Input label="Target Laba Bersih / bulan" value={finForm.target_laba_bulanan} onChangeText={(v) => setFinForm({ ...finForm, target_laba_bulanan: v })} keyboardType="number-pad" testID="finance-target-input" />
           <Button title="Simpan Saldo Awal" variant="primary" loading={saveFin.isPending} onPress={() => saveFin.mutate()} testID="finance-save-button" style={{ marginTop: 6 }} />
         </Card>
 
