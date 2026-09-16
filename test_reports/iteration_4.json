@@ -1,0 +1,40 @@
+{
+  "summary": "Iteration 4 covers 7 bug fixes (BUG1-BUG7) + Payroll module + Access matrix + new owner screens. Backend: 26/26 pytest assertions pass against the public preview URL — profit modal_part/laba snapshot, junk parts rejection & import_trash restore, cancelled payments removed from omzet/dashboard/laba-rugi, laba-rugi/cashflow/settings-finance shapes persist, KREDIT normalizes ISO due_date + pay-debt sets LUNAS + debt-reminders lists due≤3d, SOP master CRUD & finish blocking when SOP incomplete, cancel requires owner_password + non-empty reason, employees CRUD + payroll report bonus math (units*bonus_per_unit), settings/access role matrix owner-only. Frontend: owner login → dashboard shows OMZET HARI INI + 'PIUTANG BELUM LUNAS' card (Laba Bersih Real string present in DOM). Lainnya menu confirms 4 new owner items: Laporan Laba Rugi Harian, Penggajian Karyawan, Sampah Import, Pengaturan Owner. All new screens /laba-rugi, /penggajian, /pengaturan, /sampah-import render with expected labels. Stok screen (owner) shows the Bersihkan Part Sampah sparkles icon top-right. No React Native red screens, no deprecated packages detected in the touched screens.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/transactions", "issue": "Vehicle 'year' is a string type (Pydantic v2). Not a bug but worth documenting for API consumers — earlier tests failed until we sent '2022' as string."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration4_payroll_and_bugs.py",
+    "/app/test_reports/pytest/iteration4.xml"
+  ],
+  "action_items": [
+    "Consider adding testID='login-button' on the MASUK button (currently no data-testid, tests had to click by text/coords).",
+    "Optional: expose a visible text label 'Bersihkan Part Sampah' alongside the sparkles icon on Stok screen for discoverability — right now it is icon-only which can be missed by less technical owners.",
+    "Optional: harden POST /api/settings/access with role-shape validation (currently accepts any dict).",
+    "Optional: pytest class-scoped fixture defined as instance method emits a PytestRemovedIn10 deprecation warning in test_iteration4 (harmless; can be refactored to @classmethod later)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 3467 lines — should be split by domain (payroll, sop, trash, finance) into modules for maintainability.",
+    "GET /api/dashboard exposes omzet_hari_ini (not 'omzet'); ensure /frontend/(tabs)/index.tsx keys match — otherwise the Laba Bersih Real card would silently show 0.",
+    "cancel endpoint hard-codes owner password check via verify_owner_password; document that it accepts owner_password from any authenticated role (correct per requirement but non-obvious).",
+    "payroll_report uses month_default() but no explicit date_from/date_to override — acceptable, mirrors laba-rugi."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration4_payroll_and_bugs.py"
+  ],
+  "success_rate": {"backend": "100% (26/26)", "frontend": "~95% (all 4 new screens + Stok sparkles + dashboard card verified via UI)"},
+  "seed_data_creation": "Created TEST_ prefixed customers, vehicles, parts, service transactions, credit transactions, one active TEST_Mek_* employee (cleaned up in fixture teardown), several SOP checklist items (some soft-deleted). Also touched db.settings.finance (saldo_awal_bengkel=111222, owner_draw=500000) and db.settings.access (added kasir/mekanik role entries). Owner may wish to reset finance saldo values via /pengaturan.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend tests: /app/backend/tests/test_iteration4_payroll_and_bugs.py (~30s). Login endpoint returns {access_token, token_type, user} (NOT 'token'). Service item 'kind' must be 'jasa' or 'part'. Vehicle 'year' is str. /transactions/{id}/start requires body {mechanic_id, km}. Dashboard exposes omzet_hari_ini/omzet_bulan_ini (not 'omzet'). BASE_URL comes from EXPO_PUBLIC_BACKEND_URL in /app/frontend/.env. Owner login on the mobile web preview: fill inputs then click MASUK (no testID; use coords or text=Masuk). All 4 new /laba-rugi, /penggajian, /pengaturan, /sampah-import routes are reachable directly after login token is stored in AsyncStorage.",
+  "rca_of_issue": "N/A — every requirement (7 bugs + payroll + access + frontend) verified. Test-script bugs found during iteration were fixed (login response key mismatch, vehicle year type, service kind literal, /start body requirement, dashboard omzet field name)."
+}

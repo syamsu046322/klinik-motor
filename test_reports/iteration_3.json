@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 3 covers 6 features wired this session (profit-trend, backup banner, expense edit, date-edit for sale/movement/trx/expense, address fields on customer & sale, custom date-range in reports). Backend: 14/14 pytest tests pass against public preview URL. Frontend: dashboard renders profit-trend-card + backup-reminder-banner, laporan-penjualan filter toggle exposes sales-from-input/sales-to-input, transaksi/baru new-customer form renders AddressFields with Lombok village autocomplete (verified suggestion 'Sesela · Gunungsari · Lombok Barat'). Outlet page could not be exercised end-to-end because the outlet stock list remained in loading state with an empty DB, but source inspection confirms sale-address-desa and owner-only sale-date-input are wired.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "outlet stock listing",
+        "issue": "Outlet page shows 'Memuat…' indefinitely on a fresh DB and console shows repeated 401 responses on background calls (harmless for logged-in flows but noisy). Confirm outlet default selection so the initial GET /api/outlets/{oid}/stock is authorised and does not silently swallow errors.",
+        "affected_testIDs": ["outlet-search-input"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3_new_features.py",
+    "/app/test_reports/pytest/iteration3.xml"
+  ],
+  "action_items": [
+    "Investigate the persistent 401 console errors on all authenticated screens (likely a legacy WebSocket / hot endpoint without token). Not blocking but worth silencing.",
+    "Consider seeding a demo expense + outlet part so QA can smoke-test expense-edit-sheet and outlet sale-address-desa / sale-date-input via UI without needing curl seeding.",
+    "Owner-only PUT /api/transactions/{tid}/date was NOT auto-tested (requires the full servis + item + checkout + pay flow to seed). Endpoint exists at server.py:2472 and mirrors sale/movement date-edit; recommend a targeted test once a service transaction is available."
+  ],
+  "critical_code_review_comments": [
+    "GET /api/sales/{sid} returns a wrapped { sale, shop } object while POST /api/sales returns the sale directly — mildly inconsistent, callers must remember to unwrap.",
+    "Expense edit endpoint allows owner but silently ignores unknown keys via Pydantic; consider stricter validation (extra='forbid').",
+    "PUT /api/stock-movements/{mid}/date accepts a raw dict body instead of a Pydantic model, unlike the other date-edit endpoints (server.py:553)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3_new_features.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "~85%"},
+  "seed_data_creation": "Created TEST_IT3 part (code=TEST_IT3, stock=50) plus temporary TEST_ expense/sale/customer entries via backend tests. Sales/movements are backdated to 2026-03/2026-04 by the date-edit tests; owner can clean these up if desired.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend tests live in /app/backend/tests/test_iteration3_new_features.py (pytest, ~25s on preview URL). If retesting UI on outlet.tsx you'll need at least one part with stock at the MAIN outlet — use POST /api/parts as owner to create one, then search 'TEST_' in /outlet. Login credentials: owner/owner123. To test PUT /api/transactions/{tid}/date, first create a service transaction via POST /api/transactions, add items, checkout and pay to seed one.",
+  "rca_of_issue": "N/A — all listed features work as specified. One test initially failed (test_sale_stores_customer_address_parts) because GET /api/sales/{sid} wraps the sale under a 'sale' key while POST /api/sales returns it flat; test was corrected to unwrap and all 14 tests pass."
+}
